@@ -1,0 +1,5 @@
+useDynLib(semx, .registration = TRUE)
+import(methods)
+import(Rcpp)
+export(ModelIRBuilder)
+export(LikelihoodDriver)

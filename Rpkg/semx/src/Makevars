@@ -1,0 +1,24 @@
+CXX_STD = CXX20
+PKG_CPPFLAGS = -I../../../cpp/include -I../../../build/_deps/lbfgspp-src/include
+
+VPATH = ../../../cpp/src/libsemx
+
+SOURCES = model_graph.cpp \
+          parameter.cpp \
+          parameter_transform.cpp \
+          covariance_structure.cpp \
+          kronecker_covariance.cpp \
+          fixed_covariance.cpp \
+          scaled_fixed_covariance.cpp \
+          multi_kernel_covariance.cpp \
+          gaussian_outcome.cpp \
+          binomial_outcome.cpp \
+          negative_binomial_outcome.cpp \
+          weibull_outcome.cpp \
+          ordinal_outcome.cpp \
+          model_ir.cpp \
+          optimizer.cpp \
+          likelihood_driver.cpp \
+          outcome_family_factory.cpp
+
+OBJECTS = r_bindings.o RcppExports.o $(SOURCES:.cpp=.o)
