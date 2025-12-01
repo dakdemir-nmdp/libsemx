@@ -41,10 +41,21 @@ public:
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                                                 EstimationMethod method = EstimationMethod::ML) const;
 
+    [[nodiscard]] std::unordered_map<std::string, double> evaluate_model_gradient(const ModelIR& model,
+                                                const std::unordered_map<std::string, std::vector<double>>& data,
+                                                const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+                                                const std::unordered_map<std::string, std::vector<double>>& dispersions,
+                                                const std::unordered_map<std::string, std::vector<double>>& covariance_parameters = {},
+                                                const std::unordered_map<std::string, std::vector<double>>& status = {},
+                                                const std::unordered_map<std::string, std::vector<double>>& extra_params = {},
+                                                const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
+                                                EstimationMethod method = EstimationMethod::ML) const;
+
     [[nodiscard]] OptimizationResult fit(const ModelIR& model,
                                          const std::unordered_map<std::string, std::vector<double>>& data,
                                          const OptimizationOptions& options,
-                                         const std::string& optimizer_name = "lbfgs") const;
+                                         const std::string& optimizer_name = "lbfgs",
+                                         const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {}) const;
 };
 
 }  // namespace libsemx

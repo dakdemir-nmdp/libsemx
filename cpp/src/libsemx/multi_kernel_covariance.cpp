@@ -45,4 +45,35 @@ void MultiKernelCovariance::fill_covariance(const std::vector<double>& parameter
     }
 }
 
+std::vector<std::vector<double>> MultiKernelCovariance::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    double sigma_sq = parameters[0];
+    
+    std::vector<std::vector<double>> grads;
+    grads.reserve(parameters.size());
+    
+    // Gradient w.r.t sigma_sq: sum(w_k * K_k)
+    std::vector<double> d_sigma(dimension() * dimension(), 0.0);
+    for (std::size_t k = 0; k < kernels_.size(); ++k) {
+        double w = parameters[1 + k];
+        const auto& kernel = kernels_[k];
+        for (std::size_t i = 0; i < d_sigma.size(); ++i) {
+            d_sigma[i] += w * kernel[i];
+        }
+    }
+    grads.push_back(std::move(d_sigma));
+    
+    // Gradient w.r.t w_k: sigma_sq * K_k
+    for (std::size_t k = 0; k < kernels_.size(); ++k) {
+        std::vector<double> d_w(dimension() * dimension());
+        const auto& kernel = kernels_[k];
+        for (std::size_t i = 0; i < d_w.size(); ++i) {
+            d_w[i] = sigma_sq * kernel[i];
+        }
+        grads.push_back(std::move(d_w));
+    }
+    
+    return grads;
+}
+
 }  // namespace libsemx

@@ -1,9 +1,12 @@
 # libsemx TODO
 
 ## Active
-- [ ] Implement analytic gradients for ModelObjective to replace finite differences
+- [ ] Implement analytic gradients for mixed models (random effects)
 
 ## Completed
+- [x] Expose fixed covariance data in LikelihoodDriver::fit and bindings. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R "fixed covariance"`. (2025-12-01)
+- [x] Extend ModelObjective to include covariance parameters in optimization. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R libsemx_tests`. (2025-12-01)
+- [x] Implement analytic gradients for ModelObjective to replace finite differences (for fixed effects). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R libsemx_tests`. (2025-12-01)
 - [x] Integrate LBFGS optimizer into LikelihoodDriver and expose to bindings. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R LikelihoodDriver`, `PYTHONPATH=build uv run pytest python/semx/tests/test_fit.py`. (2025-12-01)
 - [x] Implement Multi-Kernel covariance structure with weighted sum of kernels. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
 - [x] Implement Genomic Relationship Matrix (GRM) kernel support. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)

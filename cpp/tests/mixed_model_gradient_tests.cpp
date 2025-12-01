@@ -1,0 +1,108 @@
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include "libsemx/likelihood_driver.hpp"
+#include "libsemx/model_ir.hpp"
+
+#include <vector>
+#include <unordered_map>
+#include <cmath>
+#include <iostream>
+
+using namespace libsemx;
+
+TEST_CASE("LikelihoodDriver evaluates analytic gradients for Gaussian mixed model", "[gradient][mixed]") {
+    ModelIRBuilder builder;
+    builder.add_variable("y", VariableKind::Observed, "gaussian");
+    builder.add_variable("x", VariableKind::Latent);
+    builder.add_variable("cluster", VariableKind::Grouping);
+    
+    // y = beta * x + u + e
+    builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
+    
+    // Random intercept u ~ N(0, sigma_u^2)
+    builder.add_covariance("G", "diagonal", 1);
+    builder.add_random_effect("u", {"cluster"}, "G");
+    
+    auto model = builder.build();
+    
+    // Data: 2 clusters, 2 obs each
+    std::vector<double> y = {1.0, 2.0, 3.0, 4.0};
+    std::vector<double> x = {0.5, 0.5, 1.0, 1.0};
+    std::vector<double> cluster = {1.0, 1.0, 2.0, 2.0};
+    
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"x", x},
+        {"cluster", cluster}
+    };
+    
+    // Parameters
+    double beta = 1.5;
+    double sigma_u_sq = 0.5;
+    
+    std::unordered_map<std::string, std::vector<double>> linear_predictors;
+    linear_predictors["y"] = {beta * 0.5, beta * 0.5, beta * 1.0, beta * 1.0};
+    
+    std::unordered_map<std::string, std::vector<double>> dispersions;
+    dispersions["y"] = {1.0, 1.0, 1.0, 1.0}; // Fixed residual variance = 1
+    
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters;
+    covariance_parameters["G"] = {sigma_u_sq};
+    
+    LikelihoodDriver driver;
+    
+    // Analytic gradient
+    auto gradients = driver.evaluate_model_gradient(model, data, linear_predictors, dispersions, covariance_parameters, {}, {}, {}, EstimationMethod::ML);
+    
+    // Finite differences
+    double epsilon = 1e-6;
+    
+    // Check beta
+    {
+        double beta_plus = beta + epsilon;
+        std::unordered_map<std::string, std::vector<double>> lp_plus = linear_predictors;
+        for(size_t i=0; i<4; ++i) lp_plus["y"][i] = beta_plus * x[i];
+        
+        double l_plus = driver.evaluate_model_loglik(model, data, lp_plus, dispersions, covariance_parameters, {}, {}, {}, EstimationMethod::ML);
+        
+        double beta_minus = beta - epsilon;
+        std::unordered_map<std::string, std::vector<double>> lp_minus = linear_predictors;
+        for(size_t i=0; i<4; ++i) lp_minus["y"][i] = beta_minus * x[i];
+        
+        double l_minus = driver.evaluate_model_loglik(model, data, lp_minus, dispersions, covariance_parameters, {}, {}, {}, EstimationMethod::ML);
+        
+        double fd_grad = (l_plus - l_minus) / (2 * epsilon);
+        
+        REQUIRE_THAT(gradients["beta"], Catch::Matchers::WithinRel(fd_grad, 1e-4));
+    }
+    
+    // Check sigma_u_sq
+    {
+        double sigma_plus = sigma_u_sq + epsilon;
+        std::unordered_map<std::string, std::vector<double>> cp_plus = covariance_parameters;
+        cp_plus["G"] = {sigma_plus};
+        
+        double l_plus = driver.evaluate_model_loglik(model, data, linear_predictors, dispersions, cp_plus, {}, {}, {}, EstimationMethod::ML);
+        
+        double sigma_minus = sigma_u_sq - epsilon;
+        std::unordered_map<std::string, std::vector<double>> cp_minus = covariance_parameters;
+        cp_minus["G"] = {sigma_minus};
+        
+        double l_minus = driver.evaluate_model_loglik(model, data, linear_predictors, dispersions, cp_minus, {}, {}, {}, EstimationMethod::ML);
+        
+        double fd_grad = (l_plus - l_minus) / (2 * epsilon);
+        
+        // Parameter name for diagonal covariance is "G_0" in ModelObjective, but evaluate_model_gradient returns map by param_id?
+        // Wait, evaluate_model_gradient returns map with keys from edge.parameter_id.
+        // But for covariance parameters, what keys does it use?
+        // It currently doesn't return covariance gradients in the GLM case (empty).
+        // I need to decide on keys.
+        // ModelObjective maps "G_0" to index.
+        // evaluate_model_gradient should probably return "G_0", "G_1", etc. or a nested map?
+        // The signature returns flat map <string, double>.
+        // So I should use "G_0" etc.
+        
+        REQUIRE_THAT(gradients["G_0"], Catch::Matchers::WithinRel(fd_grad, 1e-4));
+    }
+}

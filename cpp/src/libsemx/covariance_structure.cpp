@@ -32,6 +32,10 @@ void CovarianceStructure::validate_parameters(const std::vector<double>& paramet
     }
 }
 
+std::vector<std::vector<double>> CovarianceStructure::parameter_gradients(const std::vector<double>& /*parameters*/) const {
+    throw std::runtime_error("parameter_gradients not implemented for this covariance structure");
+}
+
 UnstructuredCovariance::UnstructuredCovariance(std::size_t dimension)
     : CovarianceStructure(dimension, triangular_number(dimension)) {}
 
@@ -61,6 +65,26 @@ void UnstructuredCovariance::validate_parameters(const std::vector<double>& para
     }
 }
 
+std::vector<std::vector<double>> UnstructuredCovariance::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    const std::size_t dim = dimension();
+    const std::size_t pc = parameter_count();
+    std::vector<std::vector<double>> grads(pc, std::vector<double>(dim * dim, 0.0));
+
+    std::size_t param_index = 0;
+    for (std::size_t row = 0; row < dim; ++row) {
+        for (std::size_t col = 0; col <= row; ++col) {
+            // param_index corresponds to (row, col)
+            grads[param_index][row * dim + col] = 1.0;
+            if (row != col) {
+                grads[param_index][col * dim + row] = 1.0;
+            }
+            param_index++;
+        }
+    }
+    return grads;
+}
+
 DiagonalCovariance::DiagonalCovariance(std::size_t dimension)
     : CovarianceStructure(dimension, dimension) {}
 
@@ -78,6 +102,19 @@ void DiagonalCovariance::validate_parameters(const std::vector<double>& paramete
             throw std::invalid_argument("diagonal covariance requires strictly positive entries");
         }
     }
+}
+
+std::vector<std::vector<double>> DiagonalCovariance::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    const std::size_t dim = dimension();
+    const std::size_t pc = parameter_count();
+    std::vector<std::vector<double>> grads(pc, std::vector<double>(dim * dim, 0.0));
+
+    for (std::size_t i = 0; i < dim; ++i) {
+        // param i corresponds to (i, i)
+        grads[i][i * dim + i] = 1.0;
+    }
+    return grads;
 }
 
 }  // namespace libsemx

@@ -109,4 +109,69 @@ void KroneckerCovariance::fill_covariance(const std::vector<double>& parameters,
     matrix = std::move(current_matrix);
 }
 
+std::vector<std::vector<double>> KroneckerCovariance::parameter_gradients(const std::vector<double>& parameters) const {
+    if (learn_scale_) {
+        throw std::runtime_error("Analytic gradients for KroneckerCovariance with learn_scale=true not yet implemented");
+    }
+    
+    // If learn_scale_ is false, G = A (x) B (x) ...
+    // dG/dtheta_A = dA/dtheta_A (x) B (x) ...
+    
+    // First, materialize all components
+    std::vector<std::vector<double>> matrices;
+    std::vector<std::size_t> dims;
+    std::size_t param_offset = 0;
+    
+    for (const auto& comp : components_) {
+        std::size_t p = comp->parameter_count();
+        std::vector<double> params(parameters.begin() + param_offset, parameters.begin() + param_offset + p);
+        matrices.push_back(comp->materialize(params));
+        dims.push_back(comp->dimension());
+        param_offset += p;
+    }
+    
+    std::vector<std::vector<double>> grads;
+    param_offset = 0;
+    
+    for (size_t i = 0; i < components_.size(); ++i) {
+        std::size_t p = components_[i]->parameter_count();
+        std::vector<double> params(parameters.begin() + param_offset, parameters.begin() + param_offset + p);
+        auto comp_grads = components_[i]->parameter_gradients(params);
+        
+        for (const auto& dM : comp_grads) {
+            // Compute Kronecker product of matrices[0]... dM ... matrices[last]
+            std::vector<double> current = (i == 0) ? dM : matrices[0];
+            std::size_t current_dim = dims[0];
+            
+            for (size_t j = 1; j < components_.size(); ++j) {
+                const std::vector<double>& next = (j == i) ? dM : matrices[j];
+                std::size_t next_dim = dims[j];
+                
+                std::size_t new_dim = current_dim * next_dim;
+                std::vector<double> new_matrix(new_dim * new_dim);
+                
+                for (std::size_t rA = 0; rA < current_dim; ++rA) {
+                    for (std::size_t cA = 0; cA < current_dim; ++cA) {
+                        double valA = current[rA * current_dim + cA];
+                        for (std::size_t rB = 0; rB < next_dim; ++rB) {
+                            for (std::size_t cB = 0; cB < next_dim; ++cB) {
+                                double valB = next[rB * next_dim + cB];
+                                std::size_t r = rA * next_dim + rB;
+                                std::size_t c = cA * next_dim + cB;
+                                new_matrix[r * new_dim + c] = valA * valB;
+                            }
+                        }
+                    }
+                }
+                current = std::move(new_matrix);
+                current_dim = new_dim;
+            }
+            grads.push_back(std::move(current));
+        }
+        param_offset += p;
+    }
+    
+    return grads;
+}
+
 }  // namespace libsemx

@@ -97,9 +97,11 @@ PYBIND11_MODULE(_libsemx, m) {
              py::arg("extra_params") = std::unordered_map<std::string, std::vector<double>>{},
              py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
              py::arg("method") = EstimationMethod::ML)
-        .def("fit", &LikelihoodDriver::fit,
+                .def("fit", &LikelihoodDriver::fit,
              py::arg("model"),
              py::arg("data"),
-             py::arg("options") = OptimizationOptions(),
-             py::arg("optimizer_name") = "lbfgs");
+             py::arg("options"),
+             py::arg("optimizer_name") = "lbfgs",
+             py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{});
+}
 }

@@ -91,6 +91,10 @@ add_executable(libsemx_tests
     tests/kronecker_covariance_tests.cpp
     tests/grm_tests.cpp
     tests/multi_kernel_tests.cpp
+    tests/analytic_gradient_tests.cpp
+    tests/covariance_optimization_tests.cpp
+    tests/fixed_covariance_fit_tests.cpp
+    tests/mixed_model_gradient_tests.cpp
 )
 
 target_link_libraries(libsemx_tests

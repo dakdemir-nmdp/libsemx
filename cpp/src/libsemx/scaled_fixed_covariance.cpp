@@ -21,4 +21,10 @@ void ScaledFixedCovariance::fill_covariance(const std::vector<double>& parameter
     }
 }
 
+std::vector<std::vector<double>> ScaledFixedCovariance::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    // Gradient w.r.t scale is just the fixed matrix
+    return {fixed_matrix_};
+}
+
 }  // namespace libsemx

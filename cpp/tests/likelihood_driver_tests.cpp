@@ -136,7 +136,7 @@ TEST_CASE("LikelihoodDriver throws on missing data for ModelIR", "[likelihood_dr
     std::unordered_map<std::string, std::vector<double>> linear_predictors = {{"y1", {0.0}}};
     std::unordered_map<std::string, std::vector<double>> dispersions;  // Missing dispersions
 
-    REQUIRE_THROWS_AS(driver.evaluate_model_loglik(model, data, linear_predictors, dispersions), std::runtime_error);
+    REQUIRE_THROWS_AS(driver.evaluate_model_loglik(model, data, linear_predictors, dispersions), std::invalid_argument);
 }
 
 TEST_CASE("LikelihoodDriver fits simple regression model", "[likelihood_driver]") {
