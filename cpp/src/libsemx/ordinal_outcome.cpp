@@ -91,8 +91,19 @@ OutcomeEvaluation OrdinalOutcome::evaluate(double observed,
     }
     
     double hess = (prob * d2P_deta2 - dP_deta * dP_deta) / (prob * prob);
-
-    return {log_lik, grad, hess};
+    double d3P_deta3 = 0.0;
+    if (lower_tau != -std::numeric_limits<double>::infinity()) {
+        double x = lower_tau - eta;
+        d3P_deta3 += (x * x - 1.0) * dens_lower;
+    }
+    if (upper_tau != std::numeric_limits<double>::infinity()) {
+        double x = upper_tau - eta;
+        d3P_deta3 -= (x * x - 1.0) * dens_upper;
+    }
+    const double prob_sq = prob * prob;
+    const double prob_cu = prob_sq * prob;
+    double third = (prob_sq * d3P_deta3 - 3.0 * prob * d2P_deta2 * dP_deta + 2.0 * dP_deta * dP_deta * dP_deta) / prob_cu;
+    return {log_lik, grad, hess, third};
 }
 
 double OrdinalOutcome::default_dispersion(std::size_t /*n*/) const {

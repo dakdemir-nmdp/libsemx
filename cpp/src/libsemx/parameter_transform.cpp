@@ -18,6 +18,10 @@ bool IdentityTransform::is_valid_constrained(double /*constrained*/) const noexc
     return true;
 }
 
+double IdentityTransform::constrained_derivative(double /*unconstrained*/) const noexcept {
+    return 1.0;
+}
+
 double LogTransform::to_constrained(double unconstrained) const {
     return std::exp(unconstrained);
 }
@@ -31,6 +35,10 @@ double LogTransform::to_unconstrained(double constrained) const {
 
 bool LogTransform::is_valid_constrained(double constrained) const noexcept {
     return constrained > 0.0;
+}
+
+double LogTransform::constrained_derivative(double unconstrained) const noexcept {
+    return std::exp(unconstrained);
 }
 
 LogisticTransform::LogisticTransform(double lower_bound, double upper_bound)
@@ -57,6 +65,12 @@ double LogisticTransform::to_unconstrained(double constrained) const {
 
 bool LogisticTransform::is_valid_constrained(double constrained) const noexcept {
     return (constrained > lower_) && (constrained < upper_);
+}
+
+double LogisticTransform::constrained_derivative(double unconstrained) const noexcept {
+    const double span = upper_ - lower_;
+    const double logistic = 1.0 / (1.0 + std::exp(-unconstrained));
+    return span * logistic * (1.0 - logistic);
 }
 
 double LogisticTransform::lower() const noexcept {

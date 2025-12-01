@@ -24,6 +24,7 @@ OutcomeEvaluation GaussianOutcome::evaluate(double observed,
     eval.log_likelihood = -0.5 * (std::log(kTwoPi * variance) + residual * residual * inv_variance);
     eval.first_derivative = residual * inv_variance;
     eval.second_derivative = -inv_variance;
+    eval.third_derivative = 0.0;
     return eval;
 }
 

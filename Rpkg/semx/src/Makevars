@@ -5,6 +5,7 @@ VPATH = ../../../cpp/src/libsemx
 
 SOURCES = model_graph.cpp \
           parameter.cpp \
+          parameter_catalog.cpp \
           parameter_transform.cpp \
           covariance_structure.cpp \
           kronecker_covariance.cpp \
@@ -15,6 +16,9 @@ SOURCES = model_graph.cpp \
           binomial_outcome.cpp \
           negative_binomial_outcome.cpp \
           weibull_outcome.cpp \
+          exponential_outcome.cpp \
+          lognormal_outcome.cpp \
+          loglogistic_outcome.cpp \
           ordinal_outcome.cpp \
           model_ir.cpp \
           optimizer.cpp \

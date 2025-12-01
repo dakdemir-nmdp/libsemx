@@ -39,11 +39,14 @@ OutcomeEvaluation NegativeBinomialOutcome::evaluate(double observed,
     const double dVdeta = dV_dmu * mu;
     const double d_mudivV_deta = mu * (-1.0 / (variance * variance)) * dVdeta;
     const double hessian = mu / variance * (y - mu - mu * dV_dmu) + (y - mu) * d_mudivV_deta;
+    const double denom = k + mu;
+    const double third = -k * mu * (k + y) * (k - mu) / (denom * denom * denom);
 
     OutcomeEvaluation eval;
     eval.log_likelihood = loglik;
     eval.first_derivative = score;
     eval.second_derivative = hessian;
+    eval.third_derivative = third;
 
     return eval;
 }

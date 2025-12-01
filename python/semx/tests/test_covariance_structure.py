@@ -1,19 +1,43 @@
 """Tests for covariance structure functionality."""
 
+from __future__ import annotations
+
 import pytest
 
+semx = pytest.importorskip("semx")
 
-class TestCovarianceStructure:
-    """Test suite for CovarianceStructure mirroring C++ fixtures."""
 
-    def test_unstructured_covariance_materializes_symmetric_matrix(self):
-        """Mirror C++: UnstructuredCovariance materializes symmetric matrix."""
-        assert True
+@pytest.mark.parametrize(
+    ("structure", "dimension"),
+    [
+        ("compound_symmetry", 2),
+        ("cs", 3),
+        ("ar1", 4),
+        ("toeplitz", 3),
+        ("fa1", 3),
+    ],
+)
+def test_model_ir_records_new_covariance_structures(structure: str, dimension: int) -> None:
+    """ModelIRBuilder should serialize the new covariance identifiers for bindings."""
 
-    def test_unstructured_covariance_rejects_invalid_parameters(self):
-        """Mirror C++: UnstructuredCovariance rejects invalid parameters."""
-        assert True
+    builder = semx.ModelIRBuilder()
+    builder.add_variable("y", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("cluster", semx.VariableKind.Grouping)
+    builder.add_edge(semx.EdgeKind.Regression, "cluster", "y", "beta")
+    builder.add_covariance("G_new", structure, dimension)
 
-    def test_diagonal_covariance_enforces_positive_diagonal(self):
-        """Mirror C++: DiagonalCovariance enforces positive diagonal."""
-        assert True
+    design_vars = ["cluster"]
+    if dimension > 1:
+        for idx in range(dimension):
+            latent_name = f"z{idx}"
+            builder.add_variable(latent_name, semx.VariableKind.Latent)
+            design_vars.append(latent_name)
+
+    builder.add_random_effect("u_cluster", design_vars, "G_new")
+
+    model = builder.build()
+    assert len(model.covariances) == 1
+    cov = model.covariances[0]
+    assert cov.id == "G_new"
+    assert cov.structure == structure
+    assert cov.dimension == dimension

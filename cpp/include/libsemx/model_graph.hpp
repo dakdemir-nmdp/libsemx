@@ -1,35 +1,51 @@
 #pragma once
 
+#include "libsemx/model_types.hpp"
+
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace libsemx {
-
-enum class VariableType {
-    Observed,
-    Latent
-};
-
-struct Variable {
-    std::string name;
-    VariableType type;
-};
 
 class ModelGraph {
 public:
     ModelGraph() = default;
 
-    void add_variable(std::string name, VariableType type);
+    void add_variable(std::string name, VariableKind kind, std::string family = {});
 
-    [[nodiscard]] bool contains(const std::string& name) const;
+    void add_edge(EdgeKind kind, std::string source, std::string target, std::string parameter_id);
 
-    [[nodiscard]] const Variable& get(const std::string& name) const;
+    void add_covariance(std::string id, std::string structure, std::size_t dimension);
 
-    [[nodiscard]] std::vector<std::string> variable_names() const;
+    void add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id);
+
+    void register_parameter(std::string id,
+                            ParameterConstraint constraint = ParameterConstraint::Free,
+                            double initial_value = 0.0);
+
+    [[nodiscard]] const std::vector<VariableSpec>& variables() const noexcept;
+
+    [[nodiscard]] const std::vector<EdgeSpec>& edges() const noexcept;
+
+    [[nodiscard]] const std::vector<CovarianceSpec>& covariances() const noexcept;
+
+    [[nodiscard]] const std::vector<RandomEffectSpec>& random_effects() const noexcept;
+
+    [[nodiscard]] const std::vector<ParameterSpec>& parameters() const noexcept;
+
+    [[nodiscard]] ModelIR to_model_ir() const;
 
 private:
-    std::unordered_map<std::string, Variable> variables_;
+    std::vector<VariableSpec> variables_;
+    std::vector<EdgeSpec> edges_;
+    std::vector<CovarianceSpec> covariances_;
+    std::vector<RandomEffectSpec> random_effects_;
+    std::unordered_map<std::string, VariableKind> variable_index_;
+    std::unordered_map<std::string, std::size_t> covariance_index_;
+    std::vector<ParameterSpec> parameters_;
+    std::unordered_map<std::string, std::size_t> parameter_index_;
 };
 
 }  // namespace libsemx

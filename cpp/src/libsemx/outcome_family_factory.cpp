@@ -3,6 +3,9 @@
 #include "libsemx/binomial_outcome.hpp"
 #include "libsemx/negative_binomial_outcome.hpp"
 #include "libsemx/weibull_outcome.hpp"
+#include "libsemx/exponential_outcome.hpp"
+#include "libsemx/lognormal_outcome.hpp"
+#include "libsemx/loglogistic_outcome.hpp"
 #include "libsemx/ordinal_outcome.hpp"
 
 #include <memory>
@@ -23,11 +26,20 @@ std::unique_ptr<OutcomeFamily> OutcomeFamilyFactory::create(const std::string& f
     }
     if (family_name == "weibull" || family_name == "weibull_aft") {
         return std::make_unique<WeibullOutcome>();
+    }
+    if (family_name == "exponential" || family_name == "exponential_aft") {
+        return std::make_unique<ExponentialOutcome>();
+    }
+    if (family_name == "lognormal" || family_name == "lognormal_aft") {
+        return std::make_unique<LognormalOutcome>();
+    }
+    if (family_name == "loglogistic" || family_name == "loglogistic_aft") {
+        return std::make_unique<LogLogisticOutcome>();
+    }
     if (family_name == "ordinal" || family_name == "probit") {
         return std::make_unique<OrdinalOutcome>();
     }
     throw std::invalid_argument("Unknown outcome family: " + family_name);
-}   throw std::invalid_argument("Unknown outcome family: " + family_name);
 }
 
 }  // namespace libsemx

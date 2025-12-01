@@ -9,6 +9,7 @@ struct OutcomeEvaluation {
     double log_likelihood;
     double first_derivative;
     double second_derivative;
+    double third_derivative;
 };
 
 class OutcomeFamily {

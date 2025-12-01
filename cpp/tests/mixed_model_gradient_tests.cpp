@@ -272,3 +272,71 @@ TEST_CASE("LikelihoodDriver analytic gradients handle crossed grouping factors",
         REQUIRE_THAT(gradients["G_b_0"], Catch::Matchers::WithinRel(fd, 1e-4));
     }
 }
+
+TEST_CASE("LikelihoodDriver Laplace gradients match finite differences", "[gradient][laplace]") {
+    ModelIRBuilder builder;
+    builder.add_variable("y", VariableKind::Observed, "binomial");
+    builder.add_variable("x", VariableKind::Latent);
+    builder.add_variable("cluster", VariableKind::Grouping);
+
+    builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
+
+    builder.add_covariance("G", "diagonal", 1);
+    builder.add_random_effect("u", {"cluster"}, "G");
+
+    auto model = builder.build();
+
+    std::vector<double> y = {0, 1, 0, 1, 0, 1};
+    std::vector<double> x = {-1.0, -0.5, 0.2, 0.7, 1.0, 1.5};
+    std::vector<double> cluster = {1.0, 1.0, 2.0, 2.0, 3.0, 3.0};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"x", x},
+        {"cluster", cluster}
+    };
+
+    double beta = 0.8;
+    double sigma = 0.6;
+
+    std::unordered_map<std::string, std::vector<double>> linear_predictors;
+    linear_predictors["y"].resize(y.size());
+    for (size_t i = 0; i < y.size(); ++i) {
+        linear_predictors["y"][i] = beta * x[i];
+    }
+
+    std::unordered_map<std::string, std::vector<double>> dispersions;
+    dispersions["y"] = std::vector<double>(y.size(), 1.0);
+
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters;
+    covariance_parameters["G"] = {sigma};
+
+    LikelihoodDriver driver;
+    auto gradients = driver.evaluate_model_gradient(
+        model,
+        data,
+        linear_predictors,
+        dispersions,
+        covariance_parameters,
+        {},
+        {},
+        {},
+        EstimationMethod::ML);
+
+    auto loglik = [&](double b, double s) {
+        std::unordered_map<std::string, std::vector<double>> lp = linear_predictors;
+        for (size_t i = 0; i < x.size(); ++i) {
+            lp["y"][i] = b * x[i];
+        }
+        std::unordered_map<std::string, std::vector<double>> covs = covariance_parameters;
+        covs["G"][0] = s;
+        return driver.evaluate_model_loglik(model, data, lp, dispersions, covs, {}, {}, {}, EstimationMethod::ML);
+    };
+
+    const double eps = 1e-5;
+    double fd_beta = (loglik(beta + eps, sigma) - loglik(beta - eps, sigma)) / (2 * eps);
+    double fd_sigma = (loglik(beta, sigma + eps) - loglik(beta, sigma - eps)) / (2 * eps);
+
+    REQUIRE_THAT(gradients.at("beta"), Catch::Matchers::WithinRel(fd_beta, 1e-4));
+    REQUIRE_THAT(gradients.at("G_0"), Catch::Matchers::WithinRel(fd_sigma, 1e-4));
+}

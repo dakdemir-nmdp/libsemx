@@ -41,6 +41,7 @@ OutcomeEvaluation BinomialOutcome::evaluate(double observed,
     eval.log_likelihood = observed * log_p + (1.0 - observed) * log_1mp;
     eval.first_derivative = observed - p;
     eval.second_derivative = -p * (1.0 - p);
+    eval.third_derivative = -p * (1.0 - p) * (1.0 - 2.0 * p);
 
     return eval;
 }

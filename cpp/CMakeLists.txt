@@ -12,6 +12,7 @@ add_library(libsemx STATIC
     src/libsemx/model_graph.cpp
     src/libsemx/parameter.cpp
     src/libsemx/parameter_transform.cpp
+    src/libsemx/parameter_catalog.cpp
     src/libsemx/covariance_structure.cpp
     src/libsemx/kronecker_covariance.cpp
     src/libsemx/fixed_covariance.cpp
@@ -21,6 +22,9 @@ add_library(libsemx STATIC
     src/libsemx/binomial_outcome.cpp
     src/libsemx/negative_binomial_outcome.cpp
     src/libsemx/weibull_outcome.cpp
+    src/libsemx/exponential_outcome.cpp
+    src/libsemx/lognormal_outcome.cpp
+    src/libsemx/loglogistic_outcome.cpp
     src/libsemx/ordinal_outcome.cpp
     src/libsemx/model_ir.cpp
     src/libsemx/optimizer.cpp
@@ -79,16 +83,24 @@ add_executable(libsemx_tests
     tests/binomial_outcome_tests.cpp
     tests/mixed_model_tests.cpp
     tests/weibull_outcome_tests.cpp
+    tests/exponential_outcome_tests.cpp
+    tests/lognormal_outcome_tests.cpp
+    tests/loglogistic_outcome_tests.cpp
     tests/ordinal_outcome_tests.cpp
+    tests/survival_likelihood_tests.cpp
     tests/competing_risks_tests.cpp
     tests/negative_binomial_outcome_tests.cpp
     tests/outcome_family_factory_tests.cpp
+    tests/parameter_catalog_tests.cpp
     tests/model_ir_tests.cpp
     tests/optimizer_tests.cpp
     tests/likelihood_driver_tests.cpp
     tests/reml_tests.cpp
     tests/laplace_tests.cpp
     tests/kronecker_covariance_tests.cpp
+    tests/kronecker_laplace_gradient_tests.cpp
+    tests/negative_binomial_laplace_gradient_tests.cpp
+    tests/ordinal_laplace_gradient_tests.cpp
     tests/grm_tests.cpp
     tests/multi_kernel_tests.cpp
     tests/analytic_gradient_tests.cpp

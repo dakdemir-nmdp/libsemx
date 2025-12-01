@@ -1,9 +1,69 @@
 # libsemx TODO
 
 ## Active
-- [ ] Extend mixed-model analytic gradients to non-Gaussian (Laplace) families and validate against finite differences across multiple random-effect structures
+- [ ] Extend ModelGraph + IR parameter registry so structural equations, constraints, and parameter metadata match blueprint §§2.2–3.2. Tests: `ctest --test-dir build -R "model_graph"`, `ctest --test-dir build -R "likelihood_driver"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "model_graph or fit"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Introduce a central parameter catalog that maps edge IDs and covariance specs to `Parameter` objects plus transforms, then thread it through `LikelihoodDriver::fit`.
+	- [x] Restore the default identity design fallback for scaled-fixed random effects so the GRM/fixed covariance fixtures keep passing after the catalog refactor. (2025-12-01)
+	- [x] Expand `ModelGraph` to store regressions/loadings/covariances directly and serialize them into ModelIR so bindings share one source of truth (parameter specs recorded with constraint metadata surfaced through Python/R bindings). (2025-12-12)
+	- [x] Add Catch2 + Python/R tests exercising duplicate detection, parameter ordering, and gradient alignment once the registry is in place. (2025-12-01)
+		- [x] Cover ModelGraph duplicate/family validation through `python/semx/tests/test_model_graph.py` so bindings mirror the C++ exceptions. (2025-12-11)
+		- [x] Mirror ModelGraph edge/covariance/random-effect serialization plus validation via `python/semx/tests/test_model_graph.py` and `python/semx/tests/test_model_ir.py`. (2025-12-11)
+		- [x] Add `testthat` coverage for ModelIRBuilder invariants (duplicates, families, edge/covariance/random-effect checks) in `Rpkg/semx/tests/testthat/test-bindings.R`. (2025-12-11)
+		- [x] Extend Catch2 `cpp/tests/model_graph_tests.cpp` with empty-graph, covariance, and edge/random-effect validation cases to keep the core aligned with the bindings. (2025-12-11)
+		- [x] Assert deterministic parameter ordering/constraints across C++/Python/R (new Catch2 tests plus `test_model_graph.py` and `test-bindings.R`), and fix the REML adjustment sign in `LikelihoodDriver` while wiring the catalog to the serialized specs. (2025-12-12)
+- [x] Broaden the covariance catalog with compound symmetry, AR(1), Toeplitz, and factor-analytic structures per blueprint §3.3, each with analytic gradients. Tests: `ctest --test-dir build -R "covariance"`, `ctest --test-dir build -R "laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "covariance"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Implement the new covariance classes plus factory wiring and gradient hooks, preserving positive-definite parameterizations.
+	- [x] Add finite-difference gradient probes in Catch2 along with Laplace fit scenarios that mix the new structures with existing ones.
+	- [x] Mirror the fixtures via Python/R tests that serialize IR payloads using the new covariance identifiers.
+- [ ] Complete the survival and competing-risks stack by adding exponential, lognormal, and loglogistic AFT outcomes plus CIF-aware cause-specific families (blueprint §7). Tests: `ctest --test-dir build -R "survival"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "survival"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [ ] Implement the additional outcome families with analytic derivatives and shared dispersion handling.
+	- [ ] Extend `LikelihoodDriver::evaluate_model_loglik_full` scenarios (C++/Python/R) to cover censored data and CIF calculations.
+	- [ ] Document the new families in README/examples and add deterministic fixtures for multi-cause survival payloads.
+- [ ] Build ergonomic Python and R front-end APIs that translate user formulas/arguments into the shared IR, keeping bindings thin (blueprint §§8–10). Tests: `PYTHONPATH=build uv run pytest python/semx/tests -k "api"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`, `ctest --test-dir build -R "likelihood_driver"`. (2025-12-01)
+	- [ ] Introduce `semx.Model` (Python) and matching R S3 constructor that accept formula-style specs, random-effect declarations, and covariance definitions, then emit IR for C++.
+	- [ ] Add integration tests proving Python/R front-ends round-trip the existing Laplace, Kronecker, and survival fixtures through the bindings.
+	- [ ] Update documentation/examples to walk through the new APIs and ensure CI instructions reference the front-end tests.
+- [x] Validate Ordinal (probit) Laplace gradients with threshold transforms so categorical families stay aligned with blueprint §§3.6 & 6.2. Tests: `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "laplace_gradient"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Add a Catch2 finite-difference probe for an ordinal mixed model (3-category probit with random intercept) to guard the C++ core. (2025-12-01)
+	- [x] Mirror the ordinal gradient check through Python bindings with the same IR payload and finite differences. (2025-12-01)
+	- [x] Mirror the scenario in the R bindings via `evaluate_model_loglik_full` to keep front-ends consistent. (2025-12-01)
+- [x] Validate Negative Binomial Laplace gradients with random intercepts so non-Gaussian families beyond binomial stay covered; leverage blueprint §§3.6 & 6.3 for derivative expectations. Tests: `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "laplace_gradient"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Add a Catch2 finite-difference gradient probe for a negative-binomial mixed model (random intercept) to guard the C++ core. (2025-12-01)
+	- [x] Mirror the negative-binomial gradient check through Python bindings (reusing the shared IR) with finite differences. (2025-12-01)
+	- [x] Mirror the scenario in the R bindings via `evaluate_model_loglik_full` to keep all front-ends aligned. (2025-12-01)
+- [x] Validate Kronecker Laplace gradients against finite differences so the new fixtures catch future regressions; extend blueprint §7.2 references into numerical harnesses. Tests: `ctest --test-dir build -R "Kronecker"`, `PYTHONPATH=build uv run pytest python/semx/tests -k kronecker`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Add a Catch2 finite-difference probe (beta plus kernel weights) for the Kronecker+diagonal model to quantify gradient error tolerances. (2025-12-01)
+	- [x] Mirror the numeric check through Python and R smoke tests (e.g., compare analytic gradients to autograd/finite diff utilities) to keep bindings in lockstep. (2025-12-01)
 
-## Completed
+- [x] Validate Laplace `fit()` with correlated random slopes (unstructured q=2) so we cover off-diagonal covariance gradients; extend Catch2/Python/R fixtures accordingly per blueprint §3.3. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Add a Catch2 scenario that uses an unstructured 2×2 covariance for the intercept+slope random effect and asserts the optimizer reports both variances plus covariance. (2025-12-01)
+	- [x] Mirror the same correlated random-slope payload via Python/R Laplace fit tests so bindings stay aligned on parameter ordering. (2025-12-01)
+
+- [x] Stress Laplace `fit()` with Kronecker + diagonal covariance stacks so multi-kernel parameter transforms stay stable; implement Catch2/Python/R fixtures per blueprint §§3.3 & 7.2. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-05)
+	- [x] Re-read blueprint §§3.3 & 7.2 to lock down Kronecker kernel layout plus gradient expectations, then sketch the shared IR payload (traits × environments with diagonal noise). (2025-12-05)
+	- [x] Add a Catch2 Laplace scenario combining a Kronecker covariance with a diagonal effect and assert gradients for all kernel weights. (2025-12-05)
+	- [x] Mirror the Kronecker Laplace fit via Python and R bindings, keeping IR payloads identical to the C++ fixture and passing in fixed kernels via bindings. (2025-12-05)
+
+- [x] Cover Laplace `fit()` with random-slope effects (q>1) so block Hessians and parameter transforms stay stable; reuse the binomial GLMM payload but add slope columns per blueprint §3.2. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
+	- [x] Extend the Catch2 Laplace fixture to include a random effect with intercept+slope (dimension two) under a diagonal covariance and assert q>1 gradients. (2025-12-04)
+	- [x] Mirror the same IR payload through Python and R fit tests so bindings hit the same q>1 Laplace code paths. (2025-12-04)
+
+- [x] Stress-test Laplace `fit()` with mixed covariance types (diagonal + scaled-fixed) so stacked transforms stay stable; extend Catch2/Python/R fixtures accordingly. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
+	- [x] Add a Catch2 scenario mixing diagonal and scaled fixed covariances (two random effects) and assert Laplace fit convergence. (2025-12-04)
+	- [x] Mirror the same heteroskedastic random-effects payload through Python/R tests to guard binding parity. (2025-12-04)
+
+- [x] Broaden Laplace `fit()` coverage to multi-effect binomial models so the optimizer handles stacked covariance parameters; ensure ModelObjective exposes the requisite transforms through bindings. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
+	- [x] Extend the Catch2 Laplace fit fixture to include two random effects with distinct covariance structures and assert optimizer stability. (2025-12-04)
+	- [x] Add mirrored Python/R integration tests that serialize the same IR payload so we catch any binding drift for stacked Laplace parameters. (2025-12-04)
+
+- [x] Enable Laplace-aware `fit()` flows so ModelObjective can optimize binomial mixed models end-to-end with analytic gradients; tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
+	- [x] Add a Catch2 integration test that runs `LikelihoodDriver::fit` on a Laplace (binomial) mixed model and confirms convergence with analytic gradients. (2025-12-04)
+	- [x] Mirror the same scenario via Python and R fit tests to ensure the IR/optimizer stack stays synchronized across front-ends. (2025-12-04)
+
+- [x] Extend mixed-model analytic gradients to non-Gaussian (Laplace) families and validate against finite differences across multiple random-effect structures. (2025-12-03)
+	- [x] Derive and implement analytic gradients for single-effect Laplace models (reference blueprint §6.3) reusing the Newton-mode Hessian; tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace gradients"` (2025-12-01).
+	- [x] Generalize the Laplace gradient path to multiple random effects by assembling block-aware Hessians and validating blockwise traces; tests: `ctest --test-dir build -R "Laplace"` (2025-12-02).
+	- [x] Expose Laplace gradients through ModelObjective/Python bindings and add IR-driven integration tests mirroring the Gaussian suite; tests: `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"` (2025-12-03).
 - [x] Generalize Gaussian mixed-model likelihood/gradient assembly to handle multiple grouping factors via full V construction. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "analytic gradients"`. (2025-12-01)
 - [x] Implement analytic gradients for mixed models (multiple Gaussian random effects per grouping). Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "analytic gradients"`. (2025-12-02)
 - [x] Expose fixed covariance data in LikelihoodDriver::fit and bindings. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R "fixed covariance"`. (2025-12-01)

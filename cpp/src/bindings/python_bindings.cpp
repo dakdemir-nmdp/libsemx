@@ -22,6 +22,11 @@ PYBIND11_MODULE(_libsemx, m) {
         .value("Covariance", EdgeKind::Covariance)
         .export_values();
 
+    py::enum_<ParameterConstraint>(m, "ParameterConstraint")
+        .value("Free", ParameterConstraint::Free)
+        .value("Positive", ParameterConstraint::Positive)
+        .export_values();
+
     py::enum_<EstimationMethod>(m, "EstimationMethod")
         .value("ML", EstimationMethod::ML)
         .value("REML", EstimationMethod::REML)
@@ -69,12 +74,19 @@ PYBIND11_MODULE(_libsemx, m) {
         .def_readwrite("variables", &RandomEffectSpec::variables)
         .def_readwrite("covariance_id", &RandomEffectSpec::covariance_id);
 
+    py::class_<ParameterSpec>(m, "ParameterSpec")
+        .def(py::init<>())
+        .def_readwrite("id", &ParameterSpec::id)
+        .def_readwrite("constraint", &ParameterSpec::constraint)
+        .def_readwrite("initial_value", &ParameterSpec::initial_value);
+
     py::class_<ModelIR>(m, "ModelIR")
         .def(py::init<>())
         .def_readwrite("variables", &ModelIR::variables)
         .def_readwrite("edges", &ModelIR::edges)
         .def_readwrite("covariances", &ModelIR::covariances)
-        .def_readwrite("random_effects", &ModelIR::random_effects);
+        .def_readwrite("random_effects", &ModelIR::random_effects)
+        .def_readwrite("parameters", &ModelIR::parameters);
 
     py::class_<ModelIRBuilder>(m, "ModelIRBuilder")
         .def(py::init<>())
@@ -97,11 +109,20 @@ PYBIND11_MODULE(_libsemx, m) {
              py::arg("extra_params") = std::unordered_map<std::string, std::vector<double>>{},
              py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
              py::arg("method") = EstimationMethod::ML)
+          .def("evaluate_model_gradient", &LikelihoodDriver::evaluate_model_gradient,
+                 py::arg("model"),
+                 py::arg("data"),
+                 py::arg("linear_predictors"),
+                 py::arg("dispersions"),
+                 py::arg("covariance_parameters") = std::unordered_map<std::string, std::vector<double>>{},
+                 py::arg("status") = std::unordered_map<std::string, std::vector<double>>{},
+                 py::arg("extra_params") = std::unordered_map<std::string, std::vector<double>>{},
+                 py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
+                 py::arg("method") = EstimationMethod::ML)
                 .def("fit", &LikelihoodDriver::fit,
              py::arg("model"),
              py::arg("data"),
              py::arg("options"),
              py::arg("optimizer_name") = "lbfgs",
              py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{});
-}
 }

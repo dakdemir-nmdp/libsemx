@@ -3,6 +3,7 @@
 #include <Eigen/Core>
 #include <LBFGS.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
@@ -36,6 +37,13 @@ OptimizationResult GradientDescentOptimizer::optimize(const ObjectiveFunction& f
     OptimizationResult result;
     result.parameters = std::move(parameters);
 
+    const double decrease_factor = 0.5;
+    const double increase_factor = 1.05;
+    const double min_step = 1e-8;
+    double step_size = options.learning_rate;
+    std::vector<double> candidate(result.parameters.size());
+    std::vector<double> candidate_gradient(result.parameters.size());
+
     for (std::size_t iter = 0; iter < options.max_iterations; ++iter) {
         const auto gradient = function.gradient(result.parameters);
         const double grad_norm = norm2(gradient);
@@ -50,9 +58,36 @@ OptimizationResult GradientDescentOptimizer::optimize(const ObjectiveFunction& f
             break;
         }
 
-        for (std::size_t i = 0; i < result.parameters.size(); ++i) {
-            result.parameters[i] -= options.learning_rate * gradient[i];
+        bool accepted = false;
+        double step = step_size;
+        double candidate_objective = objective;
+        double candidate_grad_norm = grad_norm;
+        for (int backtrack = 0; backtrack < 12; ++backtrack) {
+            for (std::size_t i = 0; i < result.parameters.size(); ++i) {
+                candidate[i] = result.parameters[i] - step * gradient[i];
+            }
+            candidate_objective = function.value(candidate);
+            candidate_gradient = function.gradient(candidate);
+            candidate_grad_norm = norm2(candidate_gradient);
+            if (candidate_objective <= objective || candidate_grad_norm < grad_norm) {
+                accepted = true;
+                break;
+            }
+            step *= decrease_factor;
+            if (step < min_step) {
+                break;
+            }
         }
+
+        if (!accepted) {
+            step_size = std::max(step_size * decrease_factor, min_step);
+            continue;  // try again with a smaller global step
+        }
+
+        result.parameters = candidate;
+        result.objective_value = candidate_objective;
+        result.gradient_norm = candidate_grad_norm;
+        step_size = std::min(step * increase_factor, options.learning_rate * 4.0);
     }
 
     if (!result.converged) {
@@ -113,22 +148,24 @@ OptimizationResult LBFGSOptimizer::optimize(const ObjectiveFunction& function,
     try {
         niter = solver.minimize(functor, x, fx);
     } catch (...) {
-        // Fallback or rethrow? For now, we assume if it throws, optimization failed.
-        // But we want to return the best state found if possible.
-        // LBFGSpp throws std::runtime_error on line search failure.
+        GradientDescentOptimizer fallback;
+        std::vector<double> current(x.data(), x.data() + x.size());
+        return fallback.optimize(function, current, options);
     }
 
     OptimizationResult result;
     result.parameters.assign(x.data(), x.data() + x.size());
     result.objective_value = fx;
     result.iterations = niter;
-    
+
     std::vector<double> final_grad = function.gradient(result.parameters);
     result.gradient_norm = norm2(final_grad);
-    
-    // LBFGSpp returns number of iterations. If it didn't throw, it likely converged or hit max iter.
-    // We check gradient norm against tolerance to be sure.
     result.converged = (result.gradient_norm <= options.tolerance);
+
+    if (!result.converged) {
+        GradientDescentOptimizer fallback;
+        return fallback.optimize(function, result.parameters, options);
+    }
 
     return result;
 }

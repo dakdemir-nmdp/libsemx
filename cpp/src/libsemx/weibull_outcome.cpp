@@ -51,8 +51,9 @@ OutcomeEvaluation WeibullOutcome::evaluate(double observed,
 
     // d2LL/deta2 = -k^2 * z
     const double hess = -k * k * z;
+    const double third = k * k * k * z;
 
-    return {log_lik, grad, hess};
+    return {log_lik, grad, hess, third};
 }
 
 double WeibullOutcome::default_dispersion(std::size_t /*n*/) const {

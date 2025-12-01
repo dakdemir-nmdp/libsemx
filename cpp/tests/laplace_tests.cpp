@@ -55,3 +55,59 @@ TEST_CASE("LikelihoodDriver evaluates Laplace for Binomial GLMM", "[laplace][mix
     
     REQUIRE_THAT(loglik, Catch::Matchers::WithinRel(expected, 1e-4));
 }
+
+TEST_CASE("Laplace fit mixes new covariance structures", "[laplace][covariance]") {
+    libsemx::ModelIRBuilder builder;
+    builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
+    builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    builder.add_variable("intercept", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("z0", libsemx::VariableKind::Latent);
+    builder.add_variable("z1", libsemx::VariableKind::Latent);
+
+    builder.add_covariance("G_cs", "compound_symmetry", 2);
+    builder.add_covariance("G_diag", "diagonal", 1);
+    builder.add_covariance("G_toep", "toeplitz", 2);
+
+    builder.add_random_effect("u_cs", {"cluster", "intercept", "x"}, "G_cs");
+    builder.add_random_effect("u_diag", {"cluster"}, "G_diag");
+    builder.add_random_effect("u_toep", {"cluster", "z0", "z1"}, "G_toep");
+
+    auto model = builder.build();
+
+    const std::vector<double> y = {0.0, 1.0, 0.0, 1.0};
+    const std::vector<double> cluster = {1.0, 1.0, 2.0, 2.0};
+    const std::vector<double> intercept = {1.0, 1.0, 1.0, 1.0};
+    const std::vector<double> x = {-1.0, -0.2, 0.4, 1.1};
+    const std::vector<double> z0 = {1.0, 0.0, 1.0, 0.0};
+    const std::vector<double> z1 = {0.0, 1.0, 0.0, 1.0};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"cluster", cluster},
+        {"intercept", intercept},
+        {"x", x},
+        {"z0", z0},
+        {"z1", z1}
+    };
+
+    std::unordered_map<std::string, std::vector<double>> linear_predictors = {
+        {"y", {0.0, 0.0, 0.0, 0.0}}
+    };
+
+    std::unordered_map<std::string, std::vector<double>> dispersions = {
+        {"y", {1.0, 1.0, 1.0, 1.0}}
+    };
+
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters = {
+        {"G_cs", {0.4, 0.15}},
+        {"G_diag", {0.3}},
+        {"G_toep", {0.6, 2.2}}
+    };
+
+    libsemx::LikelihoodDriver driver;
+    double loglik = driver.evaluate_model_loglik(model, data, linear_predictors, dispersions, covariance_parameters);
+
+    REQUIRE(std::isfinite(loglik));
+    REQUIRE_THAT(loglik, Catch::Matchers::WithinAbs(-3.224501, 1e-3));
+}

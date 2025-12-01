@@ -26,6 +26,30 @@ TEST_CASE("OutcomeFamilyFactory creates correct families", "[outcome_family_fact
         REQUIRE(family != nullptr);
     }
 
+    SECTION("Weibull") {
+        auto family = libsemx::OutcomeFamilyFactory::create("weibull");
+        REQUIRE(family != nullptr);
+        REQUIRE(family->has_dispersion());
+    }
+
+    SECTION("Exponential") {
+        auto family = libsemx::OutcomeFamilyFactory::create("exponential");
+        REQUIRE(family != nullptr);
+        REQUIRE_FALSE(family->has_dispersion());
+    }
+
+    SECTION("Lognormal") {
+        auto family = libsemx::OutcomeFamilyFactory::create("lognormal_aft");
+        REQUIRE(family != nullptr);
+        REQUIRE(family->has_dispersion());
+    }
+
+    SECTION("Loglogistic") {
+        auto family = libsemx::OutcomeFamilyFactory::create("loglogistic");
+        REQUIRE(family != nullptr);
+        REQUIRE(family->has_dispersion());
+    }
+
     SECTION("Unknown family") {
         REQUIRE_THROWS_AS(libsemx::OutcomeFamilyFactory::create("unknown"), std::invalid_argument);
     }
