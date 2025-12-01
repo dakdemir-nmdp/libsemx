@@ -106,3 +106,169 @@ TEST_CASE("LikelihoodDriver evaluates analytic gradients for Gaussian mixed mode
         REQUIRE_THAT(gradients["G_0"], Catch::Matchers::WithinRel(fd_grad, 1e-4));
     }
 }
+
+TEST_CASE("LikelihoodDriver analytic gradients handle multiple random effects", "[gradient][mixed]") {
+    ModelIRBuilder builder;
+    builder.add_variable("y", VariableKind::Observed, "gaussian");
+    builder.add_variable("x", VariableKind::Latent);
+    builder.add_variable("cluster", VariableKind::Grouping);
+
+    builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
+
+    builder.add_covariance("G_intercept", "diagonal", 1);
+    builder.add_covariance("G_slope", "diagonal", 1);
+
+    builder.add_random_effect("u_intercept", {"cluster"}, "G_intercept");
+    builder.add_random_effect("u_slope", {"cluster", "x"}, "G_slope");
+
+    auto model = builder.build();
+
+    std::vector<double> y = {1.1, 1.9, 3.2, 4.5};
+    std::vector<double> x = {0.5, 0.6, 1.0, 1.5};
+    std::vector<double> cluster = {1.0, 1.0, 2.0, 2.0};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"x", x},
+        {"cluster", cluster}
+    };
+
+    double beta = 1.3;
+    double sigma_intercept = 0.4;
+    double sigma_slope = 0.2;
+
+    std::unordered_map<std::string, std::vector<double>> linear_predictors;
+    linear_predictors["y"] = {beta * 0.5, beta * 0.6, beta * 1.0, beta * 1.5};
+
+    std::unordered_map<std::string, std::vector<double>> dispersions;
+    dispersions["y"] = {1.0, 1.0, 1.0, 1.0};
+
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters;
+    covariance_parameters["G_intercept"] = {sigma_intercept};
+    covariance_parameters["G_slope"] = {sigma_slope};
+
+    LikelihoodDriver driver;
+    auto gradients = driver.evaluate_model_gradient(
+        model,
+        data,
+        linear_predictors,
+        dispersions,
+        covariance_parameters,
+        {},
+        {},
+        {});
+
+    double epsilon = 1e-6;
+
+    auto loglik = [&](double b, double si, double ss) {
+        std::unordered_map<std::string, std::vector<double>> lp = linear_predictors;
+        for (size_t i = 0; i < x.size(); ++i) {
+            lp["y"][i] = b * x[i];
+        }
+        std::unordered_map<std::string, std::vector<double>> covs = covariance_parameters;
+        covs["G_intercept"][0] = si;
+        covs["G_slope"][0] = ss;
+        return driver.evaluate_model_loglik(model, data, lp, dispersions, covs, {}, {}, {});
+    };
+
+    {
+        double fd = (loglik(beta + epsilon, sigma_intercept, sigma_slope) -
+                     loglik(beta - epsilon, sigma_intercept, sigma_slope)) / (2 * epsilon);
+        REQUIRE_THAT(gradients["beta"], Catch::Matchers::WithinRel(fd, 1e-4));
+    }
+
+    {
+        double fd = (loglik(beta, sigma_intercept + epsilon, sigma_slope) -
+                     loglik(beta, sigma_intercept - epsilon, sigma_slope)) / (2 * epsilon);
+        REQUIRE_THAT(gradients["G_intercept_0"], Catch::Matchers::WithinRel(fd, 1e-4));
+    }
+
+    {
+        double fd = (loglik(beta, sigma_intercept, sigma_slope + epsilon) -
+                     loglik(beta, sigma_intercept, sigma_slope - epsilon)) / (2 * epsilon);
+        REQUIRE_THAT(gradients["G_slope_0"], Catch::Matchers::WithinRel(fd, 1e-4));
+    }
+}
+
+TEST_CASE("LikelihoodDriver analytic gradients handle crossed grouping factors", "[gradient][mixed]") {
+    ModelIRBuilder builder;
+    builder.add_variable("y", VariableKind::Observed, "gaussian");
+    builder.add_variable("x", VariableKind::Latent);
+    builder.add_variable("cluster_a", VariableKind::Grouping);
+    builder.add_variable("cluster_b", VariableKind::Grouping);
+
+    builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
+
+    builder.add_covariance("G_a", "diagonal", 1);
+    builder.add_covariance("G_b", "diagonal", 1);
+
+    builder.add_random_effect("u_a", {"cluster_a"}, "G_a");
+    builder.add_random_effect("u_b", {"cluster_b"}, "G_b");
+
+    auto model = builder.build();
+
+    std::vector<double> y = {2.0, 2.5, 3.5, 4.0};
+    std::vector<double> x = {0.2, 0.4, 1.2, 1.4};
+    std::vector<double> cluster_a = {1.0, 1.0, 2.0, 2.0};
+    std::vector<double> cluster_b = {10.0, 20.0, 10.0, 20.0};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"x", x},
+        {"cluster_a", cluster_a},
+        {"cluster_b", cluster_b}
+    };
+
+    double beta = 0.9;
+    double sigma_a = 0.6;
+    double sigma_b = 0.3;
+
+    std::unordered_map<std::string, std::vector<double>> linear_predictors;
+    linear_predictors["y"] = {beta * 0.2, beta * 0.4, beta * 1.2, beta * 1.4};
+
+    std::unordered_map<std::string, std::vector<double>> dispersions;
+    dispersions["y"] = {1.0, 1.0, 1.0, 1.0};
+
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters;
+    covariance_parameters["G_a"] = {sigma_a};
+    covariance_parameters["G_b"] = {sigma_b};
+
+    LikelihoodDriver driver;
+    auto gradients = driver.evaluate_model_gradient(
+        model,
+        data,
+        linear_predictors,
+        dispersions,
+        covariance_parameters,
+        {},
+        {},
+        {});
+
+    auto loglik = [&](double b, double sa, double sb) {
+        std::unordered_map<std::string, std::vector<double>> lp = linear_predictors;
+        for (size_t i = 0; i < x.size(); ++i) {
+            lp["y"][i] = b * x[i];
+        }
+        std::unordered_map<std::string, std::vector<double>> covs = covariance_parameters;
+        covs["G_a"][0] = sa;
+        covs["G_b"][0] = sb;
+        return driver.evaluate_model_loglik(model, data, lp, dispersions, covs, {}, {}, {});
+    };
+
+    double eps = 1e-6;
+
+    {
+        double fd = (loglik(beta + eps, sigma_a, sigma_b) - loglik(beta - eps, sigma_a, sigma_b)) / (2 * eps);
+        REQUIRE_THAT(gradients["beta"], Catch::Matchers::WithinRel(fd, 1e-4));
+    }
+
+    {
+        double fd = (loglik(beta, sigma_a + eps, sigma_b) - loglik(beta, sigma_a - eps, sigma_b)) / (2 * eps);
+        REQUIRE_THAT(gradients["G_a_0"], Catch::Matchers::WithinRel(fd, 1e-4));
+    }
+
+    {
+        double fd = (loglik(beta, sigma_a, sigma_b + eps) - loglik(beta, sigma_a, sigma_b - eps)) / (2 * eps);
+        REQUIRE_THAT(gradients["G_b_0"], Catch::Matchers::WithinRel(fd, 1e-4));
+    }
+}

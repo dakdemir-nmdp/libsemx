@@ -1,9 +1,11 @@
 # libsemx TODO
 
 ## Active
-- [ ] Implement analytic gradients for mixed models (random effects)
+- [ ] Extend mixed-model analytic gradients to non-Gaussian (Laplace) families and validate against finite differences across multiple random-effect structures
 
 ## Completed
+- [x] Generalize Gaussian mixed-model likelihood/gradient assembly to handle multiple grouping factors via full V construction. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "analytic gradients"`. (2025-12-01)
+- [x] Implement analytic gradients for mixed models (multiple Gaussian random effects per grouping). Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "analytic gradients"`. (2025-12-02)
 - [x] Expose fixed covariance data in LikelihoodDriver::fit and bindings. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R "fixed covariance"`. (2025-12-01)
 - [x] Extend ModelObjective to include covariance parameters in optimization. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R libsemx_tests`. (2025-12-01)
 - [x] Implement analytic gradients for ModelObjective to replace finite differences (for fixed effects). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R libsemx_tests`. (2025-12-01)

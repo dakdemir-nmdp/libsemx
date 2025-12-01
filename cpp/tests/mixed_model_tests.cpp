@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <Eigen/Dense>
+
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/model_ir.hpp"
 
@@ -136,4 +138,100 @@ TEST_CASE("LikelihoodDriver evaluates Gaussian Random Slope Model", "[mixed][gau
     double expected = -0.5 * (2 * log_2pi + std::log(3.5) + 10.0/7.0);
 
     REQUIRE_THAT(loglik, Catch::Matchers::WithinRel(expected, 1e-5));
+}
+
+TEST_CASE("LikelihoodDriver log-likelihood handles crossed grouping factors", "[mixed][gaussian][loglik]") {
+    using Catch::Matchers::WithinRel;
+    libsemx::ModelIRBuilder builder;
+    builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("cluster_a", libsemx::VariableKind::Grouping);
+    builder.add_variable("cluster_b", libsemx::VariableKind::Grouping);
+
+    builder.add_covariance("G_a", "diagonal", 1);
+    builder.add_covariance("G_b", "diagonal", 1);
+    builder.add_random_effect("u_a", {"cluster_a"}, "G_a");
+    builder.add_random_effect("u_b", {"cluster_b"}, "G_b");
+
+    auto model = builder.build();
+
+    std::vector<double> y = {2.0, 2.5, 3.5, 4.0};
+    std::vector<double> x = {0.2, 0.4, 1.2, 1.4};
+    std::vector<double> cluster_a = {1.0, 1.0, 2.0, 2.0};
+    std::vector<double> cluster_b = {10.0, 20.0, 10.0, 20.0};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"x", x},
+        {"cluster_a", cluster_a},
+        {"cluster_b", cluster_b}
+    };
+
+    double beta = 0.9;
+    double sigma_a = 0.6;
+    double sigma_b = 0.3;
+
+    std::unordered_map<std::string, std::vector<double>> linear_predictors = {
+        {"y", {beta * 0.2, beta * 0.4, beta * 1.2, beta * 1.4}}
+    };
+
+    std::unordered_map<std::string, std::vector<double>> dispersions = {
+        {"y", {1.0, 1.0, 1.0, 1.0}}
+    };
+
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters = {
+        {"G_a", {sigma_a}},
+        {"G_b", {sigma_b}}
+    };
+
+    libsemx::LikelihoodDriver driver;
+    double loglik = driver.evaluate_model_loglik(
+        model,
+        data,
+        linear_predictors,
+        dispersions,
+        covariance_parameters,
+        {},
+        {},
+        {});
+
+    Eigen::Matrix4d V = Eigen::Matrix4d::Zero();
+    for (int i = 0; i < 4; ++i) {
+        V(i, i) = 1.0; // residual variance
+    }
+
+    auto add_group = [&](const std::vector<int>& indices, double variance) {
+        for (int r : indices) {
+            for (int c : indices) {
+                V(r, c) += variance;
+            }
+        }
+    };
+
+    add_group({0, 1}, sigma_a);
+    add_group({2, 3}, sigma_a);
+    add_group({0, 2}, sigma_b);
+    add_group({1, 3}, sigma_b);
+
+    Eigen::LLT<Eigen::Matrix4d> llt(V);
+    REQUIRE(llt.info() == Eigen::Success);
+
+    Eigen::Vector4d resid;
+    for (int i = 0; i < 4; ++i) {
+        resid(i) = y[i] - linear_predictors["y"][i];
+    }
+    Eigen::Vector4d alpha = llt.solve(resid);
+    double quad = resid.dot(alpha);
+
+    Eigen::Matrix4d L = llt.matrixL();
+    double log_det = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        log_det += std::log(L(i, i));
+    }
+    log_det *= 2.0;
+
+    double log_2pi = std::log(2.0 * 3.14159265358979323846);
+    double expected = -0.5 * (4 * log_2pi + log_det + quad);
+
+    REQUIRE_THAT(loglik, WithinRel(expected, 1e-6));
 }
