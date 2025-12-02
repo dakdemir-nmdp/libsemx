@@ -74,3 +74,33 @@ TEST_CASE("KroneckerCovariance: Learn Scale with Normalization", "[covariance][k
     REQUIRE_THAT(matrix[5], Catch::Matchers::WithinRel(16.0/9.0));
     REQUIRE_THAT(matrix[15], Catch::Matchers::WithinRel(32.0/9.0));
 }
+
+TEST_CASE("KroneckerCovariance: Gradients with learn_scale", "[covariance][kronecker]") {
+    std::vector<std::unique_ptr<CovarianceStructure>> components;
+    components.push_back(std::make_unique<DiagonalCovariance>(2));
+    components.push_back(std::make_unique<DiagonalCovariance>(2));
+
+    KroneckerCovariance kron(std::move(components), true);
+    
+    // Params: sigma, a1, a2, b1, b2
+    std::vector<double> params = {2.0, 1.0, 2.0, 3.0, 4.0};
+    
+    // Check analytic vs numeric
+    auto analytic = kron.parameter_gradients(params);
+    
+    double eps = 1e-6;
+    for (size_t i = 0; i < params.size(); ++i) {
+        std::vector<double> p_plus = params;
+        std::vector<double> p_minus = params;
+        p_plus[i] += eps;
+        p_minus[i] -= eps;
+        
+        auto m_plus = kron.materialize(p_plus);
+        auto m_minus = kron.materialize(p_minus);
+        
+        for (size_t j = 0; j < m_plus.size(); ++j) {
+            double num_grad = (m_plus[j] - m_minus[j]) / (2 * eps);
+            REQUIRE_THAT(analytic[i][j], Catch::Matchers::WithinRel(num_grad, 1e-4));
+        }
+    }
+}

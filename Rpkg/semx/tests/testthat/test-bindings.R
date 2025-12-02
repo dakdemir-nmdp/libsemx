@@ -4,10 +4,17 @@ as_row_major <- function(mat) {
   as.numeric(t(mat))
 }
 
+test_that("grm_vanraden builds expected kernel", {
+  markers <- matrix(c(0, 1, 2, 1), nrow = 2, byrow = TRUE)
+  grm <- grm_vanraden(markers)
+  expect_equal(length(grm), 4L)
+  expect_equal(grm, c(1, -1, -1, 1), tolerance = 1e-6)
+})
+
 build_nb_model <- function() {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "negative_binomial")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_nb", "diagonal", 1)
@@ -30,7 +37,7 @@ nb_dispersions <- function(n) {
 build_ordinal_model <- function() {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "ordinal")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_ord", "diagonal", 1)
@@ -53,12 +60,12 @@ ordinal_thresholds <- function() {
 build_kronecker_model <- function() {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
-  builder$add_variable("t1e1", 1, "")
-  builder$add_variable("t1e2", 1, "")
-  builder$add_variable("t2e1", 1, "")
-  builder$add_variable("t2e2", 1, "")
+  builder$add_variable("t1e1", 0, "gaussian")
+  builder$add_variable("t1e2", 0, "gaussian")
+  builder$add_variable("t2e1", 0, "gaussian")
+  builder$add_variable("t2e2", 0, "gaussian")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_kron", "multi_kernel", 4)
   builder$add_covariance("G_diag", "diagonal", 1)
@@ -89,6 +96,25 @@ kronecker_fixed_cov <- function() {
       as_row_major(kronecker(identity2, env_cov))
     )
   )
+}
+
+LOG_SQRT_TWO_PI <- 0.5 * log(2 * pi)
+
+lognormal_loglik <- function(time, eta, sigma, status) {
+  z <- (log(time) - eta) / sigma
+  if (status > 0) {
+    return(-0.5 * z * z - log(time) - log(sigma) - LOG_SQRT_TWO_PI)
+  }
+  return(pnorm(-z, log.p = TRUE))
+}
+
+loglogistic_loglik <- function(time, eta, gamma, status) {
+  diff <- log(time) - eta
+  u <- exp(gamma * diff)
+  if (status > 0) {
+    return(log(gamma) + gamma * diff - log(time) - 2.0 * log1p(u))
+  }
+  return(-log1p(u))
 }
 
 test_that("ModelIRBuilder enforces graph invariants", {
@@ -132,6 +158,28 @@ test_that("ModelIR surfaces parameter identifiers", {
   expect_equal(model$parameter_ids(), c("beta_x1", "beta_x2"))
 })
 
+test_that("semx_model compiles lavaan-style formulas", {
+  mod <- semx_model(
+    equations = c("eta =~ y1 + y2", "y1 ~ eta + x1", "y1 ~~ y2"),
+    families = c(y1 = "gaussian", y2 = "gaussian", x1 = "gaussian")
+  )
+
+  expect_s3_class(mod, "semx_model")
+  expect_true(inherits(mod$ir, c("ModelIR", "Rcpp_ModelIR")))
+  expect_setequal(names(mod$variables), c("eta", "y1", "y2", "x1"))
+  expect_equal(mod$variables$eta$kind, 1L) # latent
+  expect_equal(mod$variables$y1$family, "gaussian")
+  kinds <- vapply(mod$edges, function(e) e$kind, integer(1L))
+  expect_equal(sum(kinds == 0L), 2L) # loadings
+  expect_equal(sum(kinds == 1L), 2L) # regressions
+  expect_equal(sum(kinds == 2L), 1L) # covariance
+
+  expect_error(
+    semx_model("y ~ x", families = c(x = "gaussian")),
+    "requires a family"
+  )
+})
+
 test_that("Gaussian gradient alignment follows parameter registry", {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0L, "gaussian")
@@ -161,12 +209,12 @@ test_that("Gaussian gradient alignment follows parameter registry", {
   opts$tolerance <- 1e-6
 
   fit <- driver$fit(model, data, opts, "lbfgs")
-  expect_true(fit$converged)
+  expect_true(fit$optimization_result$converged)
 
   param_ids <- model$parameter_ids()
   expect_equal(param_ids, c("beta_intercept", "beta_x1", "beta_x2"))
-  betas <- stats::setNames(fit$parameters[seq_along(param_ids)], param_ids)
-  sigma <- fit$parameters[length(param_ids) + 1L]
+  betas <- stats::setNames(fit$optimization_result$parameters[seq_along(param_ids)], param_ids)
+  sigma <- fit$optimization_result$parameters[length(param_ids) + 1L]
 
   build_linear_predictors <- function(beta_vals) {
     list(
@@ -226,6 +274,129 @@ test_that("ModelIRBuilder works", {
   
   model <- builder$build()
   expect_true(!is.null(model))
+})
+
+test_that("LikelihoodDriver evaluates lognormal survival outcomes via R bindings", {
+  builder <- new(ModelIRBuilder)
+  builder$add_variable("y", 0L, "lognormal")
+  model <- builder$build()
+
+  data <- list(y = c(1.4, 2.2, 0.95))
+  linear_predictors <- list(y = c(0.3, -0.2, 0.1))
+  dispersions <- list(y = c(0.9, 1.0, 0.85))
+  status <- list(y = c(1.0, 0.0, 1.0))
+
+  driver <- new(LikelihoodDriver)
+  loglik <- driver$evaluate_model_loglik_full(
+    model,
+    data,
+    linear_predictors,
+    dispersions,
+    list(),
+    status,
+    list(),
+    NULL,
+    0L
+  )
+
+  expected <- sum(mapply(
+    lognormal_loglik,
+    data$y,
+    linear_predictors$y,
+    dispersions$y,
+    status$y
+  ))
+
+  expect_equal(loglik, expected, tolerance = 1e-10)
+})
+
+test_that("LikelihoodDriver evaluates loglogistic survival outcomes via R bindings", {
+  builder <- new(ModelIRBuilder)
+  builder$add_variable("y", 0L, "loglogistic")
+  model <- builder$build()
+
+  data <- list(y = c(1.2, 2.5, 3.0))
+  linear_predictors <- list(y = c(0.1, 0.2, -0.4))
+  dispersions <- list(y = c(1.1, 0.9, 1.3))
+  status <- list(y = c(0.0, 1.0, 1.0))
+
+  driver <- new(LikelihoodDriver)
+  loglik <- driver$evaluate_model_loglik_full(
+    model,
+    data,
+    linear_predictors,
+    dispersions,
+    list(),
+    status,
+    list(),
+    NULL,
+    0L
+  )
+
+  expected <- sum(mapply(
+    loglogistic_loglik,
+    data$y,
+    linear_predictors$y,
+    dispersions$y,
+    status$y
+  ))
+
+  expect_equal(loglik, expected, tolerance = 1e-10)
+})
+
+test_that("LikelihoodDriver accumulates CIF-style competing risks via R bindings", {
+  builder <- new(ModelIRBuilder)
+  builder$add_variable("cause_lognormal", 0L, "lognormal")
+  builder$add_variable("cause_loglogistic", 0L, "loglogistic")
+  model <- builder$build()
+
+  times <- c(1.3, 2.0, 3.6)
+  data <- list(
+    cause_lognormal = times,
+    cause_loglogistic = times
+  )
+  linear_predictors <- list(
+    cause_lognormal = c(0.2, -0.15, 0.25),
+    cause_loglogistic = c(-0.3, 0.35, 0.05)
+  )
+  dispersions <- list(
+    cause_lognormal = c(0.8, 1.05, 0.9),
+    cause_loglogistic = c(1.2, 1.0, 1.1)
+  )
+  status <- list(
+    cause_lognormal = c(1.0, 0.0, 0.0),
+    cause_loglogistic = c(0.0, 1.0, 0.0)
+  )
+
+  driver <- new(LikelihoodDriver)
+  loglik <- driver$evaluate_model_loglik_full(
+    model,
+    data,
+    linear_predictors,
+    dispersions,
+    list(),
+    status,
+    list(),
+    NULL,
+    0L
+  )
+
+  expected_lognormal <- sum(mapply(
+    lognormal_loglik,
+    data$cause_lognormal,
+    linear_predictors$cause_lognormal,
+    dispersions$cause_lognormal,
+    status$cause_lognormal
+  ))
+  expected_loglogistic <- sum(mapply(
+    loglogistic_loglik,
+    data$cause_loglogistic,
+    linear_predictors$cause_loglogistic,
+    dispersions$cause_loglogistic,
+    status$cause_loglogistic
+  ))
+
+  expect_equal(loglik, expected_lognormal + expected_loglogistic, tolerance = 1e-10)
 })
 
 test_that("ModelIRBuilder serializes new covariance structures", {
@@ -344,10 +515,10 @@ test_that("Negative binomial Laplace gradients match finite differences", {
   opts$learning_rate <- 0.1
 
   fit <- driver$fit(model, data, opts, "lbfgs")
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 2)
-  beta <- fit$parameters[[1]]
-  sigma <- fit$parameters[[2]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 2)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma <- fit$optimization_result$parameters[[2]]
 
   dispersions <- nb_dispersions(length(data$y))
   linear_predictors <- list(y = beta * data$x)
@@ -443,7 +614,7 @@ test_that("Ordinal Laplace gradients match finite differences", {
 test_that("Laplace fit converges through bindings", {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G", "diagonal", 1)
@@ -463,10 +634,10 @@ test_that("Laplace fit converges through bindings", {
   opts$tolerance <- 1e-4
 
   fit <- driver$fit(model, data, opts, "lbfgs")
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 2)
-  beta <- fit$parameters[[1]]
-  sigma <- fit$parameters[[2]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 2)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma <- fit$optimization_result$parameters[[2]]
   expect_gt(sigma, 0)
 
   linear_predictors <- list(y = beta * data$x)
@@ -491,7 +662,7 @@ test_that("Laplace fit converges through bindings", {
 test_that("Laplace multi-effect fit converges through bindings", {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
   builder$add_variable("batch", 2, "")
   builder$add_edge(1, "x", "y", "beta")
@@ -515,11 +686,11 @@ test_that("Laplace multi-effect fit converges through bindings", {
   opts$tolerance <- 5e-4
 
   fit <- driver$fit(model, data, opts, "lbfgs")
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 3)
-  beta <- fit$parameters[[1]]
-  sigma_cluster <- fit$parameters[[2]]
-  sigma_batch <- fit$parameters[[3]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 3)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma_cluster <- fit$optimization_result$parameters[[2]]
+  sigma_batch <- fit$optimization_result$parameters[[3]]
   expect_gt(sigma_cluster, 0)
   expect_gt(sigma_batch, 0)
 
@@ -545,7 +716,7 @@ test_that("Laplace multi-effect fit converges through bindings", {
 test_that("Laplace mixed covariance fit converges through bindings", {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
   builder$add_variable("batch", 2, "")
   builder$add_edge(1, "x", "y", "beta")
@@ -571,11 +742,11 @@ test_that("Laplace mixed covariance fit converges through bindings", {
   fixed_cov <- list(G_batch_fixed = list(matrix(1.0, nrow = 1, ncol = 1)))
 
   fit <- driver$fit_with_fixed(model, data, opts, "lbfgs", fixed_cov)
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 3)
-  beta <- fit$parameters[[1]]
-  sigma_cluster <- fit$parameters[[2]]
-  sigma_batch_scale <- fit$parameters[[3]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 3)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma_cluster <- fit$optimization_result$parameters[[2]]
+  sigma_batch_scale <- fit$optimization_result$parameters[[3]]
   expect_gt(sigma_cluster, 0)
   expect_gt(sigma_batch_scale, 0)
 
@@ -601,10 +772,10 @@ test_that("Laplace mixed covariance fit converges through bindings", {
 test_that("Laplace random-slope fit converges through bindings", {
   builder <- new(ModelIRBuilder)
   builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 1, "")
+  builder$add_variable("x", 0, "gaussian")
   builder$add_variable("cluster", 2, "")
-  builder$add_variable("intercept_col", 1, "")
-  builder$add_variable("z", 1, "")
+  builder$add_variable("intercept_col", 0, "gaussian")
+  builder$add_variable("z", 0, "gaussian")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_cluster2", "unstructured", 2)
   builder$add_random_effect("u_cluster2", c("cluster", "intercept_col", "z"), "G_cluster2")
@@ -625,12 +796,12 @@ test_that("Laplace random-slope fit converges through bindings", {
   opts$tolerance <- 5e-4
 
   fit <- driver$fit(model, data, opts, "lbfgs")
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 4)
-  beta <- fit$parameters[[1]]
-  sigma_intercept <- fit$parameters[[2]]
-  cov_term <- fit$parameters[[3]]
-  sigma_slope <- fit$parameters[[4]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 4)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma_intercept <- fit$optimization_result$parameters[[2]]
+  cov_term <- fit$optimization_result$parameters[[3]]
+  sigma_slope <- fit$optimization_result$parameters[[4]]
   expect_gt(sigma_intercept, 0)
   expect_gt(sigma_slope, 0)
   expect_lt(abs(cov_term), 1)
@@ -668,13 +839,13 @@ test_that("Laplace Kronecker + diagonal fit converges through bindings", {
   opts$learning_rate <- 0.2
 
   fit <- driver$fit_with_fixed(model, data, opts, "lbfgs", fixed_cov)
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 5)
-  beta <- fit$parameters[[1]]
-  sigma_kron <- fit$parameters[[2]]
-  weight_trait <- fit$parameters[[3]]
-  weight_env <- fit$parameters[[4]]
-  sigma_diag <- fit$parameters[[5]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 5)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma_kron <- fit$optimization_result$parameters[[2]]
+  weight_trait <- fit$optimization_result$parameters[[3]]
+  weight_env <- fit$optimization_result$parameters[[4]]
+  sigma_diag <- fit$optimization_result$parameters[[5]]
   expect_gt(sigma_kron, 0)
   expect_gt(sigma_diag, 0)
 
@@ -712,13 +883,13 @@ test_that("Kronecker Laplace gradients match finite differences", {
   opts$learning_rate <- 0.2
 
   fit <- driver$fit_with_fixed(model, data, opts, "lbfgs", fixed_cov)
-  expect_true(fit$converged)
-  expect_length(fit$parameters, 5)
-  beta <- fit$parameters[[1]]
-  sigma_kron <- fit$parameters[[2]]
-  weight_trait <- fit$parameters[[3]]
-  weight_env <- fit$parameters[[4]]
-  sigma_diag <- fit$parameters[[5]]
+  expect_true(fit$optimization_result$converged)
+  expect_length(fit$optimization_result$parameters, 5)
+  beta <- fit$optimization_result$parameters[[1]]
+  sigma_kron <- fit$optimization_result$parameters[[2]]
+  weight_trait <- fit$optimization_result$parameters[[3]]
+  weight_env <- fit$optimization_result$parameters[[4]]
+  sigma_diag <- fit$optimization_result$parameters[[5]]
 
   dispersions <- list(y = rep(1.0, length(data$y)))
   linear_predictors <- list(y = beta * data$x)
@@ -771,4 +942,90 @@ test_that("Kronecker Laplace gradients match finite differences", {
   expect_equal(gradients$G_kron_2, fd_env, tolerance = 3e-3)
   expect_equal(gradients$G_kron_0, fd_sigma, tolerance = 3e-3)
   expect_equal(gradients$G_diag_0, fd_diag, tolerance = 3e-3)
+})
+
+test_that("semx_model and LikelihoodDriver handle genomic markers", {
+  markers <- matrix(c(0, 1, 2, 1), nrow = 2, byrow = TRUE)
+  model <- semx_model(
+    equations = c("y ~ id1 + id2"),
+    families = c(y = "gaussian", id1 = "gaussian", id2 = "gaussian"),
+    kinds = c(group = "grouping"),
+    covariances = list(list(name = "cov_u", structure = "grm", dimension = 2L)),
+    genomic = list(cov_u = list(markers = markers)),
+    random_effects = list(list(name = "re_u", variables = c("group", "id1", "id2"), covariance = "cov_u"))
+  )
+
+  driver <- new(LikelihoodDriver)
+  data <- list(
+    y = c(1.0, 2.0),
+    group = c(1.0, 1.0),
+    id1 = c(1.0, 0.0),
+    id2 = c(0.0, 1.0)
+  )
+  linear_predictors <- list(y = c(0.0, 0.0))
+  dispersions <- list(y = c(1.0, 1.0))
+  covariance_parameters <- list(cov_u = c(1.5))
+
+  loglik <- driver$evaluate_model_loglik_full(
+    model$ir,
+    data,
+    linear_predictors,
+    dispersions,
+    covariance_parameters,
+    list(),
+    list(),
+    model$fixed_covariance_data,
+    0L
+  )
+  expected <- -0.5 * (log(4.0) + 4.625 + 2.0 * log(2 * pi))
+  expect_equal(loglik, expected, tolerance = 1e-6)
+})
+
+test_that("genomic Kronecker kernels flow through semx_model", {
+  markers <- matrix(c(0, 1, 2, 1), nrow = 2, byrow = TRUE)
+  trait_cov <- matrix(c(1.0, 0.35, 0.35, 1.0), nrow = 2, byrow = TRUE)
+  env_cov <- matrix(c(1.0, 0.2, 0.2, 1.0), nrow = 2, byrow = TRUE)
+
+  grm <- matrix(grm_vanraden(markers), nrow = 2, byrow = TRUE)
+  kron <- grm_kronecker(grm, env_cov)
+
+  model <- semx_model(
+    equations = c("y ~ t1e1 + t1e2 + t2e1 + t2e2"),
+    families = c(
+      y = "gaussian", t1e1 = "gaussian", t1e2 = "gaussian",
+      t2e1 = "gaussian", t2e2 = "gaussian"
+    ),
+    kinds = c(group = "grouping"),
+    covariances = list(list(name = "cov_gxe", structure = "grm", dimension = 4L)),
+    genomic = list(cov_gxe = list(markers = matrix(kron, nrow = 4, byrow = TRUE), precomputed = TRUE)),
+    random_effects = list(
+      list(name = "re_gxe", variables = c("group", "t1e1", "t1e2", "t2e1", "t2e2"), covariance = "cov_gxe")
+    )
+  )
+
+  driver <- new(LikelihoodDriver)
+  data <- list(
+    y = c(0.5, 1.2, -0.3, 0.9),
+    group = c(1.0, 1.0, 1.0, 1.0),
+    t1e1 = c(1, 0, 0, 0),
+    t1e2 = c(0, 1, 0, 0),
+    t2e1 = c(0, 0, 1, 0),
+    t2e2 = c(0, 0, 0, 1)
+  )
+  linear_predictors <- list(y = rep(0.0, 4))
+  dispersions <- list(y = rep(1.0, 4))
+  covariance_parameters <- list(cov_gxe = c(1.2))
+
+  loglik <- driver$evaluate_model_loglik_full(
+    model$ir,
+    data,
+    linear_predictors,
+    dispersions,
+    covariance_parameters,
+    list(),
+    list(),
+    model$fixed_covariance_data,
+    0L
+  )
+  expect_true(is.finite(loglik))
 })

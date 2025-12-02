@@ -10,6 +10,8 @@ struct OutcomeEvaluation {
     double first_derivative;
     double second_derivative;
     double third_derivative;
+    double d_dispersion{0.0};
+    std::vector<double> d_extra_params;
 };
 
 class OutcomeFamily {

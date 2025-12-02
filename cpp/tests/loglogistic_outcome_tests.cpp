@@ -6,7 +6,7 @@
 #include <cmath>
 #include <stdexcept>
 
-TEST_CASE("LogLogisticOutcome evaluates analytic expressions", "[survival][loglogistic_outcome]") {
+TEST_CASE("LogLogisticOutcome survival contributions evaluate analytic expressions", "[survival][loglogistic_outcome]") {
     libsemx::LogLogisticOutcome outcome;
 
     const double t = 1.7;
@@ -48,7 +48,7 @@ TEST_CASE("LogLogisticOutcome evaluates analytic expressions", "[survival][loglo
 
     SECTION("Validation and dispersion") {
         REQUIRE(outcome.has_dispersion());
-        REQUIRE(outcome.default_dispersion(4) == Catch::Approx(1.0));
+        REQUIRE(outcome.default_dispersion(4) == 1.0);
         REQUIRE_THROWS_AS(outcome.evaluate(0.0, eta, gamma, 1.0), std::invalid_argument);
         REQUIRE_THROWS_AS(outcome.evaluate(t, eta, 0.0, 1.0), std::invalid_argument);
     }

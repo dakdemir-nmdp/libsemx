@@ -31,12 +31,12 @@ std::vector<double> kronecker_product(const std::vector<double>& A,
 libsemx::ModelIR build_model() {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    builder.add_variable("t1e1", libsemx::VariableKind::Latent);
-    builder.add_variable("t1e2", libsemx::VariableKind::Latent);
-    builder.add_variable("t2e1", libsemx::VariableKind::Latent);
-    builder.add_variable("t2e2", libsemx::VariableKind::Latent);
+    builder.add_variable("t1e1", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t1e2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t2e1", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t2e2", libsemx::VariableKind::Observed, "gaussian");
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_kron", "multi_kernel", 4);
     builder.add_covariance("G_diag", "diagonal", 1);
@@ -92,14 +92,14 @@ TEST_CASE("Kronecker Laplace gradients match finite differences", "[kronecker][l
     options.learning_rate = 0.2;
 
     auto result = driver.fit(model, data, options, "lbfgs", fixed_covariance_data);
-    REQUIRE(result.converged);
-    REQUIRE(result.parameters.size() == 5);
+    REQUIRE(result.optimization_result.converged);
+    REQUIRE(result.optimization_result.parameters.size() == 5);
 
-    const double beta = result.parameters[0];
-    const double sigma_kron = result.parameters[1];
-    const double weight_trait = result.parameters[2];
-    const double weight_env = result.parameters[3];
-    const double sigma_diag = result.parameters[4];
+    const double beta = result.optimization_result.parameters[0];
+    const double sigma_kron = result.optimization_result.parameters[1];
+    const double weight_trait = result.optimization_result.parameters[2];
+    const double weight_env = result.optimization_result.parameters[3];
+    const double sigma_diag = result.optimization_result.parameters[4];
 
     auto build_linear_predictors = [&](double beta_val) {
         std::unordered_map<std::string, std::vector<double>> linear_predictors = { {"y", {}} };

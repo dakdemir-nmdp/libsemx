@@ -25,6 +25,11 @@ OutcomeEvaluation GaussianOutcome::evaluate(double observed,
     eval.first_derivative = residual * inv_variance;
     eval.second_derivative = -inv_variance;
     eval.third_derivative = 0.0;
+    
+    // d(ll)/d(sigma^2) = -0.5/sigma^2 + 0.5 * resid^2 / (sigma^2)^2
+    //                  = 0.5 * (resid^2/sigma^2 - 1) / sigma^2
+    eval.d_dispersion = 0.5 * (residual * residual * inv_variance - 1.0) * inv_variance;
+    
     return eval;
 }
 

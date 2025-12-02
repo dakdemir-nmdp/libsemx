@@ -1,8 +1,14 @@
 #include "libsemx/covariance_structure.hpp"
+#include "libsemx/scaled_fixed_covariance.hpp"
+#include "libsemx/multi_kernel_covariance.hpp"
+#include "libsemx/genomic_kernel.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <cctype>
+#include <string_view>
+#include <optional>
 
 namespace libsemx {
 
@@ -19,6 +25,65 @@ namespace {
 [[nodiscard]] double positive_to_correlation_derivative(double positive_value) {
     const double denom = positive_value + 1.0;
     return 2.0 / (denom * denom);
+}
+
+std::string normalize_structure_id(const std::string& id) {
+    std::string lowered;
+    lowered.reserve(id.size());
+    for (unsigned char ch : id) {
+        if (ch == '-') {
+            lowered.push_back('_');
+        } else {
+            lowered.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+    return lowered;
+}
+
+std::optional<std::size_t> parse_factor_rank(const std::string& normalized) {
+    auto parse_tail = [](std::string_view tail) -> std::optional<std::size_t> {
+        if (tail.empty()) {
+            return std::nullopt;
+        }
+        std::size_t idx = 0;
+        while (idx < tail.size() && (tail[idx] == '_' || tail[idx] == '-' || tail[idx] == '(' || tail[idx] == 'q')) {
+            ++idx;
+        }
+        if (idx >= tail.size()) {
+            return std::nullopt;
+        }
+        std::size_t value = 0;
+        for (; idx < tail.size(); ++idx) {
+            const char ch = tail[idx];
+            if (ch == ')' || ch == ' ') {
+                break;
+            }
+            if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                return std::nullopt;
+            }
+            value = value * 10 + static_cast<std::size_t>(ch - '0');
+        }
+        if (value == 0) {
+            return std::nullopt;
+        }
+        return value;
+    };
+
+    if (normalized == "factor_analytic" || normalized == "fa") {
+        return 1;
+    }
+    if (normalized.rfind("fa", 0) == 0) {
+        return parse_tail(normalized.substr(2));
+    }
+    constexpr std::string_view kPrefix = "factor_analytic";
+    if (normalized.rfind(kPrefix, 0) == 0) {
+        auto rank = parse_tail(normalized.substr(kPrefix.size()));
+        if (rank) {
+            return rank;
+        }
+        return 1;
+    }
+    return std::nullopt;
 }
 
 struct ToeplitzAutocovarianceData {
@@ -460,6 +525,139 @@ std::vector<std::vector<double>> FactorAnalyticCovariance::parameter_gradients(
     }
 
     return grads;
+}
+
+
+std::unique_ptr<CovarianceStructure> create_covariance_structure(
+    const CovarianceSpec& spec,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data) {
+
+    const std::string normalized = normalize_structure_id(spec.structure);
+
+    if (normalized == "unstructured") {
+        return std::make_unique<UnstructuredCovariance>(spec.dimension);
+    } else if (normalized == "diagonal") {
+        return std::make_unique<DiagonalCovariance>(spec.dimension);
+    } else if (normalized == "scaled_fixed") {
+        auto fixed_it = fixed_covariance_data.find(spec.id);
+        if (fixed_it == fixed_covariance_data.end()) {
+            throw std::runtime_error("Missing fixed covariance data for: " + spec.id);
+        }
+        if (fixed_it->second.empty()) {
+            throw std::runtime_error("Fixed covariance data is empty for: " + spec.id);
+        }
+        return std::make_unique<ScaledFixedCovariance>(fixed_it->second[0], spec.dimension);
+    } else if (normalized == "genomic" || normalized == "grm") {
+        auto fixed_it = fixed_covariance_data.find(spec.id);
+        if (fixed_it == fixed_covariance_data.end() || fixed_it->second.empty()) {
+            throw std::runtime_error("Missing genomic kernel data for: " + spec.id);
+        }
+        const auto& kernel = fixed_it->second.front();
+        if (kernel.size() != spec.dimension * spec.dimension) {
+            throw std::runtime_error("Genomic kernel dimension mismatch for covariance: " + spec.id);
+        }
+        return std::make_unique<GenomicKernelCovariance>(kernel, spec.dimension);
+    } else if (normalized == "multi_kernel") {
+        auto fixed_it = fixed_covariance_data.find(spec.id);
+        if (fixed_it == fixed_covariance_data.end()) {
+            throw std::runtime_error("Missing fixed covariance data for: " + spec.id);
+        }
+        return std::make_unique<MultiKernelCovariance>(fixed_it->second, spec.dimension);
+    } else if (normalized == "compound_symmetry" || normalized == "cs") {
+        return std::make_unique<CompoundSymmetryCovariance>(spec.dimension);
+    } else if (normalized == "ar1") {
+        return std::make_unique<AR1Covariance>(spec.dimension);
+    } else if (normalized == "toeplitz") {
+        return std::make_unique<ToeplitzCovariance>(spec.dimension);
+    } else if (auto rank = parse_factor_rank(normalized)) {
+        if (*rank >= spec.dimension || *rank == 0) {
+            throw std::runtime_error("Factor-analytic rank must satisfy 0 < rank < dimension for covariance: " + spec.id);
+        }
+        return std::make_unique<FactorAnalyticCovariance>(spec.dimension, *rank);
+    } else {
+        throw std::runtime_error("Unknown covariance structure: " + spec.structure);
+    }
+}
+
+std::vector<bool> build_covariance_positive_mask(const CovarianceSpec& spec,
+                                                 const CovarianceStructure& structure) {
+    std::size_t count = structure.parameter_count();
+    std::vector<bool> mask(count, false);
+    if (count == 0) {
+        return mask;
+    }
+
+    const std::string normalized = normalize_structure_id(spec.structure);
+
+    if (normalized == "diagonal") {
+        std::fill(mask.begin(), mask.end(), true);
+        return mask;
+    }
+
+    if (normalized == "unstructured") {
+        std::size_t idx = 0;
+        for (std::size_t row = 0; row < spec.dimension; ++row) {
+            for (std::size_t col = 0; col <= row; ++col) {
+                if (idx < mask.size()) {
+                    mask[idx] = (row == col);
+                }
+                ++idx;
+            }
+        }
+        return mask;
+    }
+
+    if (normalized == "scaled_fixed") {
+        mask[0] = true;
+        return mask;
+    }
+
+    if (normalized == "genomic" || normalized == "grm") {
+        mask[0] = true;
+        return mask;
+    }
+
+    if (normalized == "multi_kernel") {
+        std::fill(mask.begin(), mask.end(), true);
+        return mask;
+    }
+
+    if (normalized == "compound_symmetry" || normalized == "cs") {
+        std::fill(mask.begin(), mask.end(), true);
+        return mask;
+    }
+
+    if (normalized == "ar1") {
+        mask[0] = true;
+        if (mask.size() > 1) {
+            mask[1] = true;
+        }
+        return mask;
+    }
+
+    if (normalized == "toeplitz") {
+        std::fill(mask.begin(), mask.end(), true);
+        return mask;
+    }
+
+    if (normalized == "factor_analytic" || normalized.rfind("fa", 0) == 0 || normalized.rfind("factor_analytic", 0) == 0) {
+        // Uniquenesses are at the end and must be positive
+        // Loadings are free
+        // Structure: [loadings..., uniquenesses...]
+        // Loadings count = dim * rank
+        // Uniquenesses count = dim
+        if (auto rank = parse_factor_rank(normalized)) {
+             std::size_t loadings_count = spec.dimension * (*rank);
+             for (std::size_t i = 0; i < spec.dimension; ++i) {
+                 if (loadings_count + i < mask.size()) {
+                     mask[loadings_count + i] = true;
+                 }
+             }
+        }
+        return mask;
+    }
+
+    return mask;
 }
 
 }  // namespace libsemx

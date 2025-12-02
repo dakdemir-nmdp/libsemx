@@ -9,3 +9,4 @@ Encoding: UTF-8
 LazyData: true
 Imports: Rcpp, RcppEigen
 LinkingTo: Rcpp, RcppEigen
+RoxygenNote: 7.3.3

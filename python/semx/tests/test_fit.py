@@ -7,7 +7,7 @@ import semx
 def _build_binomial_mixed_model():
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
     builder.add_covariance("G", "diagonal", 1)
@@ -18,7 +18,7 @@ def _build_binomial_mixed_model():
 def _build_multi_effect_binomial_model():
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
     builder.add_variable("batch", semx.VariableKind.Grouping)
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
@@ -32,7 +32,7 @@ def _build_multi_effect_binomial_model():
 def _build_mixed_covariance_model():
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
     builder.add_variable("batch", semx.VariableKind.Grouping)
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
@@ -46,10 +46,10 @@ def _build_mixed_covariance_model():
 def _build_random_slope_model():
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
-    builder.add_variable("intercept_col", semx.VariableKind.Latent)
-    builder.add_variable("z", semx.VariableKind.Latent)
+    builder.add_variable("intercept_col", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("z", semx.VariableKind.Observed, "gaussian")
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
     builder.add_covariance("G_cluster2", "unstructured", 2)
     builder.add_random_effect("u_cluster2", ["cluster", "intercept_col", "z"], "G_cluster2")
@@ -71,12 +71,12 @@ def _kronecker_product(a, a_dim, b, b_dim):
 def _build_kronecker_model():
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
-    builder.add_variable("t1e1", semx.VariableKind.Latent)
-    builder.add_variable("t1e2", semx.VariableKind.Latent)
-    builder.add_variable("t2e1", semx.VariableKind.Latent)
-    builder.add_variable("t2e2", semx.VariableKind.Latent)
+    builder.add_variable("t1e1", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("t1e2", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("t2e1", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("t2e2", semx.VariableKind.Observed, "gaussian")
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
     builder.add_covariance("G_kron", "multi_kernel", 4)
     builder.add_covariance("G_diag", "diagonal", 1)
@@ -108,9 +108,9 @@ def test_fit_simple_regression():
     
     result = driver.fit(model, data, options, "lbfgs")
     
-    assert result.converged
-    assert len(result.parameters) == 1
-    assert abs(result.parameters[0] - 1.0) < 1e-3
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 1
+    assert abs(result.optimization_result.parameters[0] - 1.0) < 1e-3
 
 
 def test_gaussian_gradient_alignment_uses_parameter_specs():
@@ -142,14 +142,14 @@ def test_gaussian_gradient_alignment_uses_parameter_specs():
     options.tolerance = 1e-6
 
     result = driver.fit(model, data, options, "lbfgs")
-    assert result.converged
+    assert result.optimization_result.converged
 
     param_ids = [spec.id for spec in model.parameters]
     assert param_ids == ["beta_intercept", "beta_x1", "beta_x2"]
-    assert len(result.parameters) == len(param_ids) + 1
+    assert len(result.optimization_result.parameters) == len(param_ids) + 1
 
-    beta_lookup = dict(zip(param_ids, result.parameters[: len(param_ids)]))
-    sigma = result.parameters[len(param_ids)]
+    beta_lookup = dict(zip(param_ids, result.optimization_result.parameters[: len(param_ids)]))
+    sigma = result.optimization_result.parameters[len(param_ids)]
 
     def build_linear_predictors(beta_vals):
         return {
@@ -213,9 +213,9 @@ def test_fit_binomial_mixed_model_laplace():
     options.tolerance = 1e-4
 
     result = driver.fit(model, data, options, "lbfgs")
-    assert result.converged
-    assert len(result.parameters) == 2
-    beta, sigma = result.parameters
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 2
+    beta, sigma = result.optimization_result.parameters
     assert sigma > 0.0
 
     linear_predictors = {"y": [beta * val for val in data["x"]]}
@@ -251,9 +251,9 @@ def test_fit_multi_effect_binomial_laplace():
     options.tolerance = 5e-4
 
     result = driver.fit(model, data, options, "lbfgs")
-    assert result.converged
-    assert len(result.parameters) == 3
-    beta, sigma_cluster, sigma_batch = result.parameters
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 3
+    beta, sigma_cluster, sigma_batch = result.optimization_result.parameters
     assert sigma_cluster > 0.0
     assert sigma_batch > 0.0
 
@@ -295,9 +295,9 @@ def test_fit_mixed_covariance_binomial_laplace():
     options.tolerance = 5e-4
 
     result = driver.fit(model, data, options, "lbfgs", fixed_covariance_data=fixed_covariance)
-    assert result.converged
-    assert len(result.parameters) == 3
-    beta, sigma_cluster, sigma_batch_scale = result.parameters
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 3
+    beta, sigma_cluster, sigma_batch_scale = result.optimization_result.parameters
     assert sigma_cluster > 0.0
     assert sigma_batch_scale > 0.0
 
@@ -339,9 +339,9 @@ def test_fit_random_slope_binomial_laplace():
     options.tolerance = 5e-4
 
     result = driver.fit(model, data, options, "lbfgs")
-    assert result.converged
-    assert len(result.parameters) == 4
-    beta, sigma_intercept, cov_term, sigma_slope = result.parameters
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 4
+    beta, sigma_intercept, cov_term, sigma_slope = result.optimization_result.parameters
     assert sigma_intercept > 0.0
     assert sigma_slope > 0.0
     assert abs(cov_term) < 1.0
@@ -397,9 +397,9 @@ def test_fit_kronecker_binomial_laplace():
     options.learning_rate = 0.2
 
     result = driver.fit(model, data, options, "lbfgs", fixed_covariance_data=fixed_covariance)
-    assert result.converged
-    assert len(result.parameters) == 5
-    beta, sigma_kron, weight_trait, weight_env, sigma_diag = result.parameters
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 5
+    beta, sigma_kron, weight_trait, weight_env, sigma_diag = result.optimization_result.parameters
     assert sigma_kron > 0.0
     assert sigma_diag > 0.0
 

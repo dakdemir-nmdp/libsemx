@@ -111,3 +111,93 @@ TEST_CASE("Laplace fit mixes new covariance structures", "[laplace][covariance]"
     REQUIRE(std::isfinite(loglik));
     REQUIRE_THAT(loglik, Catch::Matchers::WithinAbs(-3.224501, 1e-3));
 }
+
+TEST_CASE("LikelihoodDriver evaluates Laplace for Poisson GLMM", "[laplace][poisson]") {
+    libsemx::ModelIRBuilder builder;
+    builder.add_variable("y", libsemx::VariableKind::Observed, "poisson");
+    builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    
+    // Random intercept: u ~ N(0, tau^2)
+    builder.add_covariance("tau_sq", "diagonal", 1);
+    builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+
+    auto model = builder.build();
+
+    // Data: 1 cluster, 2 obs
+    // y = [1, 2]
+    std::vector<double> y = {1.0, 2.0};
+    std::vector<double> cluster = {1.0, 1.0};
+    
+    // Fixed effects: mu=exp(0)=1 => preds=0
+    std::vector<double> preds = {0.0, 0.0};
+    
+    // Dispersion: 1 (ignored)
+    std::vector<double> disps = {1.0, 1.0};
+
+    // Random effect variance: tau^2 = 0.5
+    std::vector<double> tau_sq_params = {0.5};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"cluster", cluster}
+    };
+    std::unordered_map<std::string, std::vector<double>> linear_predictors = {
+        {"y", preds}
+    };
+    std::unordered_map<std::string, std::vector<double>> dispersions = {
+        {"y", disps}
+    };
+    std::unordered_map<std::string, std::vector<double>> cov_params = {
+        {"tau_sq", tau_sq_params}
+    };
+
+    libsemx::LikelihoodDriver driver;
+    double loglik = driver.evaluate_model_loglik(model, data, linear_predictors, dispersions, cov_params);
+
+    REQUIRE(std::isfinite(loglik));
+}
+
+TEST_CASE("LikelihoodDriver evaluates Laplace for Negative Binomial GLMM", "[laplace][nbinom]") {
+    libsemx::ModelIRBuilder builder;
+    builder.add_variable("y", libsemx::VariableKind::Observed, "negative_binomial");
+    builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    
+    // Random intercept: u ~ N(0, tau^2)
+    builder.add_covariance("tau_sq", "diagonal", 1);
+    builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+
+    auto model = builder.build();
+
+    // Data: 1 cluster, 2 obs
+    // y = [1, 2]
+    std::vector<double> y = {1.0, 2.0};
+    std::vector<double> cluster = {1.0, 1.0};
+    
+    // Fixed effects: mu=exp(0)=1 => preds=0
+    std::vector<double> preds = {0.0, 0.0};
+    
+    // Dispersion: k=2
+    std::vector<double> disps = {2.0, 2.0};
+
+    // Random effect variance: tau^2 = 0.5
+    std::vector<double> tau_sq_params = {0.5};
+
+    std::unordered_map<std::string, std::vector<double>> data = {
+        {"y", y},
+        {"cluster", cluster}
+    };
+    std::unordered_map<std::string, std::vector<double>> linear_predictors = {
+        {"y", preds}
+    };
+    std::unordered_map<std::string, std::vector<double>> dispersions = {
+        {"y", disps}
+    };
+    std::unordered_map<std::string, std::vector<double>> cov_params = {
+        {"tau_sq", tau_sq_params}
+    };
+
+    libsemx::LikelihoodDriver driver;
+    double loglik = driver.evaluate_model_loglik(model, data, linear_predictors, dispersions, cov_params);
+
+    REQUIRE(std::isfinite(loglik));
+}

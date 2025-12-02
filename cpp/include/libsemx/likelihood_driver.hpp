@@ -15,6 +15,21 @@ enum class EstimationMethod {
     REML
 };
 
+struct FitResult {
+    OptimizationResult optimization_result;
+    std::vector<double> standard_errors;
+    std::vector<double> vcov; // Flattened n x n matrix
+    double aic{0.0};
+    double bic{0.0};
+    double chi_square{std::numeric_limits<double>::quiet_NaN()};
+    double df{std::numeric_limits<double>::quiet_NaN()};
+    double p_value{std::numeric_limits<double>::quiet_NaN()};
+    double cfi{std::numeric_limits<double>::quiet_NaN()};
+    double tli{std::numeric_limits<double>::quiet_NaN()};
+    double rmsea{std::numeric_limits<double>::quiet_NaN()};
+    double srmr{std::numeric_limits<double>::quiet_NaN()};
+};
+
 class LikelihoodDriver {
 public:
     [[nodiscard]] double evaluate_total_loglik(const std::vector<double>& observed,
@@ -41,6 +56,11 @@ public:
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                                                 EstimationMethod method = EstimationMethod::ML) const;
 
+    struct DataParamMapping {
+        std::vector<std::string> pattern;
+        std::size_t stride = 1;
+    };
+
     [[nodiscard]] std::unordered_map<std::string, double> evaluate_model_gradient(const ModelIR& model,
                                                 const std::unordered_map<std::string, std::vector<double>>& data,
                                                 const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
@@ -49,13 +69,17 @@ public:
                                                 const std::unordered_map<std::string, std::vector<double>>& status = {},
                                                 const std::unordered_map<std::string, std::vector<double>>& extra_params = {},
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
-                                                EstimationMethod method = EstimationMethod::ML) const;
+                                                EstimationMethod method = EstimationMethod::ML,
+                                                const std::unordered_map<std::string, DataParamMapping>& data_param_mappings = {},
+                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {}) const;
 
-    [[nodiscard]] OptimizationResult fit(const ModelIR& model,
+    [[nodiscard]] FitResult fit(const ModelIR& model,
                                          const std::unordered_map<std::string, std::vector<double>>& data,
                                          const OptimizationOptions& options,
                                          const std::string& optimizer_name = "lbfgs",
-                                         const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {}) const;
+                                         const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
+                                         const std::unordered_map<std::string, std::vector<double>>& status = {},
+                                         EstimationMethod method = EstimationMethod::ML) const;
 };
 
 }  // namespace libsemx

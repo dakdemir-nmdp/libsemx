@@ -10,7 +10,7 @@ semx = pytest.importorskip("semx")
 def _build_binomial_model() -> "semx.ModelIR":
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
 
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
@@ -24,7 +24,7 @@ def _build_binomial_model() -> "semx.ModelIR":
 def _build_negative_binomial_model() -> "semx.ModelIR":
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "negative_binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
     builder.add_covariance("G_nb", "diagonal", 1)
@@ -35,12 +35,12 @@ def _build_negative_binomial_model() -> "semx.ModelIR":
 def _build_kronecker_model() -> "semx.ModelIR":
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "binomial")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
-    builder.add_variable("t1e1", semx.VariableKind.Latent)
-    builder.add_variable("t1e2", semx.VariableKind.Latent)
-    builder.add_variable("t2e1", semx.VariableKind.Latent)
-    builder.add_variable("t2e2", semx.VariableKind.Latent)
+    builder.add_variable("t1e1", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("t1e2", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("t2e1", semx.VariableKind.Observed, "gaussian")
+    builder.add_variable("t2e2", semx.VariableKind.Observed, "gaussian")
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
     builder.add_covariance("G_kron", "multi_kernel", 4)
     builder.add_covariance("G_diag", "diagonal", 1)
@@ -52,7 +52,7 @@ def _build_kronecker_model() -> "semx.ModelIR":
 def _build_ordinal_model() -> "semx.ModelIR":
     builder = semx.ModelIRBuilder()
     builder.add_variable("y", semx.VariableKind.Observed, "ordinal")
-    builder.add_variable("x", semx.VariableKind.Latent)
+    builder.add_variable("x", semx.VariableKind.Observed, "gaussian")
     builder.add_variable("cluster", semx.VariableKind.Grouping)
     builder.add_edge(semx.EdgeKind.Regression, "x", "y", "beta")
     builder.add_covariance("G_ord", "diagonal", 1)
@@ -172,9 +172,9 @@ def test_negative_binomial_laplace_gradient_matches_finite_difference():
     options.learning_rate = 0.1
 
     result = driver.fit(model, data, options, "lbfgs")
-    assert result.converged
-    assert len(result.parameters) == 2
-    beta, sigma = result.parameters
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 2
+    beta, sigma = result.optimization_result.parameters
 
     dispersions = {"y": [1.0] * len(data["y"])}
     linear_predictors = {"y": [beta * value for value in data["x"]]}
@@ -268,10 +268,10 @@ def test_kronecker_laplace_gradient_matches_finite_difference():
     options.learning_rate = 0.2
 
     result = driver.fit(model, data, options, "lbfgs", fixed_covariance_data=fixed_covariance)
-    assert result.converged
-    assert len(result.parameters) == 5
+    assert result.optimization_result.converged
+    assert len(result.optimization_result.parameters) == 5
 
-    beta, sigma_kron, weight_trait, weight_env, sigma_diag = result.parameters
+    beta, sigma_kron, weight_trait, weight_env, sigma_diag = result.optimization_result.parameters
 
     def loglik(beta_val, sigma_kron_val, weight_trait_val, weight_env_val, sigma_diag_val):
         linear_predictors = {"y": [beta_val * value for value in data["x"]]}

@@ -160,9 +160,9 @@ TEST_CASE("LikelihoodDriver fits simple regression model", "[likelihood_driver]"
     
     auto result = driver.fit(model, data, options, "lbfgs");
     
-    REQUIRE(result.converged);
-    REQUIRE(result.parameters.size() == 1);
-    REQUIRE_THAT(result.parameters[0], Catch::Matchers::WithinAbs(1.0, 1e-3));
+    REQUIRE(result.optimization_result.converged);
+    REQUIRE(result.optimization_result.parameters.size() == 1);
+    REQUIRE_THAT(result.optimization_result.parameters[0], Catch::Matchers::WithinAbs(1.0, 1e-3));
 }
 
 TEST_CASE("Model parameter ordering stays aligned with gradient map", "[likelihood_driver][gradient][parameter_catalog]") {
@@ -194,15 +194,15 @@ TEST_CASE("Model parameter ordering stays aligned with gradient map", "[likeliho
     options.tolerance = 1e-6;
 
     auto result = driver.fit(model, data, options, "lbfgs");
-    REQUIRE(result.converged);
+    REQUIRE(result.optimization_result.converged);
 
     const auto structural_count = model.parameters.size();
     REQUIRE(structural_count == 3);
-    REQUIRE(result.parameters.size() == structural_count + 1);
+    REQUIRE(result.optimization_result.parameters.size() == structural_count + 1);
 
     std::unordered_map<std::string, double> beta_lookup;
     for (std::size_t i = 0; i < structural_count; ++i) {
-        beta_lookup.emplace(model.parameters[i].id, result.parameters[i]);
+        beta_lookup.emplace(model.parameters[i].id, result.optimization_result.parameters[i]);
     }
 
     std::unordered_map<std::string, std::vector<double>> linear_predictors;
@@ -218,7 +218,7 @@ TEST_CASE("Model parameter ordering stays aligned with gradient map", "[likeliho
         {"y", std::vector<double>(n, 1.0)}
     };
 
-    const double sigma = result.parameters[structural_count];
+    const double sigma = result.optimization_result.parameters[structural_count];
 
     std::unordered_map<std::string, std::vector<double>> covariance_parameters = {
         {"G_cluster", {sigma}}
@@ -284,7 +284,7 @@ TEST_CASE("Model parameter ordering stays aligned with gradient map", "[likeliho
 TEST_CASE("LikelihoodDriver fits binomial mixed model with Laplace gradients", "[likelihood_driver][laplace][fit]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G", "diagonal", 1);
@@ -304,10 +304,10 @@ TEST_CASE("LikelihoodDriver fits binomial mixed model with Laplace gradients", "
     options.tolerance = 1e-4;
 
     auto result = driver.fit(model, data, options, "lbfgs");
-    REQUIRE(result.parameters.size() == 2);
-    REQUIRE(result.converged);
-    double beta = result.parameters[0];
-    double sigma = result.parameters[1];
+    REQUIRE(result.optimization_result.parameters.size() == 2);
+    REQUIRE(result.optimization_result.converged);
+    double beta = result.optimization_result.parameters[0];
+    double sigma = result.optimization_result.parameters[1];
     REQUIRE(sigma > 0.0);
 
     std::unordered_map<std::string, std::vector<double>> linear_predictors = {
@@ -341,7 +341,7 @@ TEST_CASE("LikelihoodDriver fits binomial mixed model with Laplace gradients", "
 TEST_CASE("LikelihoodDriver fits multi-effect binomial Laplace model", "[likelihood_driver][laplace][fit][multi_effect]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("batch", libsemx::VariableKind::Grouping);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
@@ -365,14 +365,14 @@ TEST_CASE("LikelihoodDriver fits multi-effect binomial Laplace model", "[likelih
     options.tolerance = 5e-4;
 
     auto result = driver.fit(model, data, options, "lbfgs");
-    INFO("multi-effect iterations: " << result.iterations);
-    INFO("multi-effect grad norm: " << result.gradient_norm);
-    REQUIRE(result.converged);
-    REQUIRE(result.parameters.size() == 3);
+    INFO("multi-effect iterations: " << result.optimization_result.iterations);
+    INFO("multi-effect grad norm: " << result.optimization_result.gradient_norm);
+    REQUIRE(result.optimization_result.converged);
+    REQUIRE(result.optimization_result.parameters.size() == 3);
 
-    double beta = result.parameters[0];
-    double sigma_cluster = result.parameters[1];
-    double sigma_batch = result.parameters[2];
+    double beta = result.optimization_result.parameters[0];
+    double sigma_cluster = result.optimization_result.parameters[1];
+    double sigma_batch = result.optimization_result.parameters[2];
     REQUIRE(sigma_cluster > 0.0);
     REQUIRE(sigma_batch > 0.0);
 
@@ -408,7 +408,7 @@ TEST_CASE("LikelihoodDriver fits multi-effect binomial Laplace model", "[likelih
 TEST_CASE("LikelihoodDriver fits mixed covariance Laplace model", "[likelihood_driver][laplace][fit][fixed_covariance]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("batch", libsemx::VariableKind::Grouping);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
@@ -436,14 +436,14 @@ TEST_CASE("LikelihoodDriver fits mixed covariance Laplace model", "[likelihood_d
     options.tolerance = 5e-4;
 
     auto result = driver.fit(model, data, options, "lbfgs", fixed_covariance_data);
-    INFO("mixed iterations: " << result.iterations);
-    INFO("mixed grad norm: " << result.gradient_norm);
-    REQUIRE(result.converged);
-    REQUIRE(result.parameters.size() == 3);
+    INFO("mixed iterations: " << result.optimization_result.iterations);
+    INFO("mixed grad norm: " << result.optimization_result.gradient_norm);
+    REQUIRE(result.optimization_result.converged);
+    REQUIRE(result.optimization_result.parameters.size() == 3);
 
-    double beta = result.parameters[0];
-    double sigma_cluster = result.parameters[1];
-    double sigma_batch_scale = result.parameters[2];
+    double beta = result.optimization_result.parameters[0];
+    double sigma_cluster = result.optimization_result.parameters[1];
+    double sigma_batch_scale = result.optimization_result.parameters[2];
     REQUIRE(sigma_cluster > 0.0);
     REQUIRE(sigma_batch_scale > 0.0);
 
@@ -479,10 +479,10 @@ TEST_CASE("LikelihoodDriver fits mixed covariance Laplace model", "[likelihood_d
 TEST_CASE("LikelihoodDriver fits random-slope Laplace model", "[likelihood_driver][laplace][fit][random_slope]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    builder.add_variable("intercept_col", libsemx::VariableKind::Latent);
-    builder.add_variable("z", libsemx::VariableKind::Latent);
+    builder.add_variable("intercept_col", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("z", libsemx::VariableKind::Observed, "gaussian");
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_cluster2", "unstructured", 2);
     builder.add_random_effect("u_cluster2", {"cluster", "intercept_col", "z"}, "G_cluster2");
@@ -503,15 +503,15 @@ TEST_CASE("LikelihoodDriver fits random-slope Laplace model", "[likelihood_drive
     options.tolerance = 5e-4;
 
     auto result = driver.fit(model, data, options, "lbfgs");
-    INFO("random slope iterations: " << result.iterations);
-    INFO("random slope grad norm: " << result.gradient_norm);
-    REQUIRE(result.converged);
-    REQUIRE(result.parameters.size() == 4);
+    INFO("random slope iterations: " << result.optimization_result.iterations);
+    INFO("random slope grad norm: " << result.optimization_result.gradient_norm);
+    REQUIRE(result.optimization_result.converged);
+    REQUIRE(result.optimization_result.parameters.size() == 4);
 
-    double beta = result.parameters[0];
-    double sigma_intercept = result.parameters[1];
-    double cov_intercept_slope = result.parameters[2];
-    double sigma_slope = result.parameters[3];
+    double beta = result.optimization_result.parameters[0];
+    double sigma_intercept = result.optimization_result.parameters[1];
+    double cov_intercept_slope = result.optimization_result.parameters[2];
+    double sigma_slope = result.optimization_result.parameters[3];
     REQUIRE(sigma_intercept > 0.0);
     REQUIRE(sigma_slope > 0.0);
     REQUIRE(std::abs(cov_intercept_slope) < 1.0);
@@ -562,12 +562,12 @@ TEST_CASE("LikelihoodDriver fits Kronecker Laplace model with multi-kernel covar
 
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    builder.add_variable("t1e1", libsemx::VariableKind::Latent);
-    builder.add_variable("t1e2", libsemx::VariableKind::Latent);
-    builder.add_variable("t2e1", libsemx::VariableKind::Latent);
-    builder.add_variable("t2e2", libsemx::VariableKind::Latent);
+    builder.add_variable("t1e1", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t1e2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t2e1", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t2e2", libsemx::VariableKind::Observed, "gaussian");
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_kron", "multi_kernel", 4);
     builder.add_covariance("G_diag", "diagonal", 1);
@@ -603,15 +603,15 @@ TEST_CASE("LikelihoodDriver fits Kronecker Laplace model with multi-kernel covar
     options.learning_rate = 0.2;
 
     auto result = driver.fit(model, data, options, "lbfgs", fixed_covariance_data);
-    INFO("kronecker iterations: " << result.iterations);
-    INFO("kronecker grad norm: " << result.gradient_norm);
-    REQUIRE(result.parameters.size() == 5);
+    INFO("kronecker iterations: " << result.optimization_result.iterations);
+    INFO("kronecker grad norm: " << result.optimization_result.gradient_norm);
+    REQUIRE(result.optimization_result.parameters.size() == 5);
 
-    double beta = result.parameters[0];
-    double sigma_kron = result.parameters[1];
-    double weight_trait = result.parameters[2];
-    double weight_env = result.parameters[3];
-    double sigma_diag = result.parameters[4];
+    double beta = result.optimization_result.parameters[0];
+    double sigma_kron = result.optimization_result.parameters[1];
+    double weight_trait = result.optimization_result.parameters[2];
+    double weight_env = result.optimization_result.parameters[3];
+    double sigma_diag = result.optimization_result.parameters[4];
     INFO("beta estimate: " << beta);
     INFO("sigma_kron: " << sigma_kron);
     INFO("weight_trait: " << weight_trait);
@@ -655,7 +655,7 @@ TEST_CASE("LikelihoodDriver fits Kronecker Laplace model with multi-kernel covar
     REQUIRE_THAT(gradients.at("G_kron_1"), Catch::Matchers::WithinAbs(0.0, 5e-3));
     REQUIRE_THAT(gradients.at("G_kron_2"), Catch::Matchers::WithinAbs(0.0, 5e-3));
     REQUIRE(gradients.at("G_diag_0") <= 0.0);
-    REQUIRE(result.converged);
+    REQUIRE(result.optimization_result.converged);
 }
 
 TEST_CASE("LikelihoodDriver throws on random effects in ModelIR", "[likelihood_driver]") {

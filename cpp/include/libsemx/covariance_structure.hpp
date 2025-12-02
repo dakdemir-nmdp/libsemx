@@ -2,6 +2,11 @@
 
 #include <cstddef>
 #include <vector>
+#include <memory>
+#include <string>
+#include <unordered_map>
+
+#include "libsemx/model_ir.hpp"
 
 namespace libsemx {
 
@@ -28,6 +33,14 @@ private:
     std::size_t dimension_;
     std::size_t parameter_count_;
 };
+
+[[nodiscard]] std::unique_ptr<CovarianceStructure> create_covariance_structure(
+    const CovarianceSpec& spec,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {});
+
+[[nodiscard]] std::vector<bool> build_covariance_positive_mask(const CovarianceSpec& spec,
+                                                               const CovarianceStructure& structure);
+
 
 class UnstructuredCovariance final : public CovarianceStructure {
 public:

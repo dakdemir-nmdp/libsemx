@@ -1,6 +1,7 @@
 #include "libsemx/outcome_family_factory.hpp"
 #include "libsemx/gaussian_outcome.hpp"
 #include "libsemx/binomial_outcome.hpp"
+#include "libsemx/poisson_outcome.hpp"
 #include "libsemx/negative_binomial_outcome.hpp"
 #include "libsemx/weibull_outcome.hpp"
 #include "libsemx/exponential_outcome.hpp"
@@ -20,6 +21,9 @@ std::unique_ptr<OutcomeFamily> OutcomeFamilyFactory::create(const std::string& f
     }
     if (family_name == "binomial") {
         return std::make_unique<BinomialOutcome>();
+    }
+    if (family_name == "poisson") {
+        return std::make_unique<PoissonOutcome>();
     }
     if (family_name == "negative_binomial" || family_name == "nbinom") {
         return std::make_unique<NegativeBinomialOutcome>();

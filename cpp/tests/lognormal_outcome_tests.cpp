@@ -18,7 +18,7 @@ double surv(double z) {
 }
 }
 
-TEST_CASE("LognormalOutcome evaluates analytic log-likelihood pieces", "[survival][lognormal_outcome]") {
+TEST_CASE("LognormalOutcome survival contributions match analytic log-likelihood", "[survival][lognormal_outcome]") {
     libsemx::LognormalOutcome outcome;
 
     const double t = 2.3;
@@ -35,7 +35,7 @@ TEST_CASE("LognormalOutcome evaluates analytic log-likelihood pieces", "[surviva
         REQUIRE_THAT(eval.log_likelihood, Catch::Matchers::WithinRel(expected_ll));
         REQUIRE_THAT(eval.first_derivative, Catch::Matchers::WithinRel(expected_grad));
         REQUIRE_THAT(eval.second_derivative, Catch::Matchers::WithinRel(expected_hess));
-        REQUIRE(eval.third_derivative == Catch::Approx(0.0));
+        REQUIRE(eval.third_derivative == 0.0);
     }
 
     SECTION("Censored") {
@@ -57,7 +57,7 @@ TEST_CASE("LognormalOutcome evaluates analytic log-likelihood pieces", "[surviva
 
     SECTION("Validation and dispersion") {
         REQUIRE(outcome.has_dispersion());
-        REQUIRE(outcome.default_dispersion(5) == Catch::Approx(1.0));
+        REQUIRE(outcome.default_dispersion(5) == 1.0);
         REQUIRE_THROWS_AS(outcome.evaluate(0.0, eta, sigma, 1.0), std::invalid_argument);
         REQUIRE_THROWS_AS(outcome.evaluate(t, eta, 0.0, 1.0), std::invalid_argument);
     }

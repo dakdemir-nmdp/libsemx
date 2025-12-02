@@ -1,7 +1,107 @@
 # libsemx TODO
 
 ## Active
-- [ ] Extend ModelGraph + IR parameter registry so structural equations, constraints, and parameter metadata match blueprint §§2.2–3.2. Tests: `ctest --test-dir build -R "model_graph"`, `ctest --test-dir build -R "likelihood_driver"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "model_graph or fit"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+- [x] Extend SEM branch to honor full structural model. (2025-12-02)
+    - [x] Propagate regression edges into `_stacked_y` predictors.
+    - [x] Carry intercepts/means.
+    - [x] Map cross-latent and residual covariances (Latents grouped with Unstructured covariance).
+- [x] Implement dispersion/threshold parameter handling for non-Gaussian GLMMs. (2025-12-02)
+    - [x] Expose parameters in catalog.
+    - [x] Implement gradients.
+- [x] Plumb `EstimationMethod` (ML/REML) through `ModelObjective`. (2025-12-02)
+    - [x] Updated `ModelObjective` and `LikelihoodDriver::fit` to accept `EstimationMethod`.
+    - [x] Implemented REML logic for Gaussian fixed-effects models in `LikelihoodDriver`.
+    - [x] Verified with `reml_plumbing_tests.cpp`.
+- [x] Harden Laplace solver (damping, line search, diagnostics). (2025-12-02)
+    - [x] Implemented backtracking line search in `solve_laplace_system`.
+    - [x] Added Cholesky damping to handle non-positive definite Hessians.
+- [x] Polish Python/R `summary()`/`predict()`/`plot()` surfaces. (2025-12-02)
+    - [x] Updated Python `SemFit.summary()` to return structured `SemFitSummary` object.
+    - [x] Enhanced Python `SemFit.plot()` with `ax` support and Q-Q plots.
+    - [x] Improved R `summary.semx_fit` to return list with fit indices and parameter table.
+    - [x] Updated R `plot.semx_fit` to accept additional arguments.
+- [ ] Add identifiability checks/constraints for composed covariances (Kronecker scaling, Hadamard or weighted sums with weights summing to 1) with verbose corrections surfaced in summaries.
+- [ ] Align front-end APIs with the richer DSL/plotting guidelines and design identifiability checks plus summary reporting plan.
+- [ ] Extend optimizers and fit indices.
+    - [x] Implement CFI, TLI, RMSEA, and SRMR fit indices in C++ and expose to bindings. (2025-02-24)
+    - [ ] Add variance component extraction methods.
+    - [ ] Explore/expose additional optimizer settings (e.g., line search parameters).
+- [ ] Enrich ModelIR to carry extra schema.
+    - [ ] Extend `ModelIR` to store variable labels, measurement levels, and other metadata.
+    - [ ] Ensure this metadata is preserved through the bindings and available in `summary()`.
+
+## Completed
+- [x] Add higher-level GS/trait×env builders. (2025-02-24)
+    - [x] Create easy-to-use builders for G×E models (e.g., `semx.gxe_model(...)`).
+    - [x] Support multi-environment trial (MET) data structures.
+- [x] Wire survival status through R fit and add CIF/survival prediction helpers. (2025-12-02)
+    - [x] Update R `semx_fit` to handle `Surv()` objects or status columns.
+    - [x] Implement `predict_survival()` and `predict_cif()` helpers in R and Python.
+- [x] Flesh out R/Python public methods to match blueprint surface. (2025-12-02)
+    - [x] Implement `summary()`, `predict()`, and `plot()` methods in Python (`semx.Model`) and R (`semx_model`).
+    - [x] Add Genomic Selection (GS) utilities (e.g., cross-validation helpers, heritability extraction).
+- [x] Implement Mixed Model syntax parser in R front-end. (2025-02-24)
+    - [x] Support `(1 | group)` and `(slope | group)` syntax in equations.
+    - [x] Map these expressions to `ModelIR` random effects structure.
+    - [x] Ensure parity with Python implementation.
+- [x] Implement Mixed Model syntax parser in Python front-end. (2025-02-24)
+    - [x] Support `(1 | group)` and `(slope | group)` syntax in equations.
+    - [x] Map these expressions to `ModelIR` random effects structure.
+    - [x] Automatically inject `_intercept` column for random slopes with intercept.
+- [x] Implement Survival Analysis syntax in Python front-end. (2025-02-24)
+    - [x] Support `Surv(time, status) ~ predictors` syntax in `python/semx/model.py`.
+    - [x] Automatically register `status` variable and map to `LikelihoodDriver` inputs.
+    - [x] Ensure `OutcomeFamily` is correctly set (Weibull, Exponential, etc.) via user input and C++ plumbing.
+- [x] Implement analytic gradients for residual variances in SEM mode. (2025-02-24)
+    - [x] Extended `LikelihoodDriver` to compute gradients w.r.t. dispersions using `dispersion_param_mappings`.
+    - [x] Updated `ModelObjective` to use analytic gradients for residual variances, removing the finite difference fallback.
+    - [x] Verified with `cpp/tests/sem_gradient_tests.cpp`.
+- [x] Optimize SEM gradients (Analytic Gradients for Loadings). (2025-02-24)
+    - [x] Implemented `evaluate_model_gradient` support for `data_param_mappings` to compute gradients w.r.t. design matrix $Z$.
+    - [x] Updated `ModelObjective` to use analytic gradients for loadings and covariance parameters.
+    - [x] Verified with `cpp/tests/sem_gradient_tests.cpp` matching FD gradients.
+- [x] Expose post-estimation diagnostics to R bindings. (2025-02-24)
+    - [x] Added R bindings for `compute_standardized_estimates`, `compute_model_diagnostics`, `compute_modification_indices`.
+    - [x] Updated `semx_model` (R) to provide methods/accessors for these diagnostics.
+    - [x] Fixed `compute_modification_indices` to include diagonal elements (variances) as candidates.
+- [x] Fix LikelihoodDriver for SEM estimation (Latent Variables). (2025-02-24)
+- [x] Build genomic kernel stack and GRM ingestion (blueprint §§3.4–5).
+    - [x] Add `GenomicRelationshipMatrix` (VanRaden) builder plus Kronecker helper for G×E kernels.
+    - [x] Wire GRM/`genomic` covariance structure through the factory with positive masks.
+    - [x] Add C++ tests covering GRM construction and GRM-powered likelihood evaluation.
+    - [x] Extend ModelIR/bindings to ingest marker payloads directly.
+    - [x] Add Python/R surfacing for genomic kernels and multi-environment fixtures.
+
+## Completed
+- [x] Fix LikelihoodDriver for SEM estimation (Latent Variables). (2025-02-24)
+    - [x] Modified `ModelObjective` to handle "SEM mode" by stacking data and dynamically updating design matrices with Loading parameters.
+    - [x] Verified with `python/semx/tests/test_sem_estimation.py` (Loadings are now estimated correctly).
+- [x] Expose post-estimation diagnostics to Python bindings. (2025-02-24)
+    - [x] Add Python bindings for `compute_standardized_estimates`, `compute_model_diagnostics`, `compute_modification_indices`.
+    - [x] Update `semx.Model` (Python) to provide methods/accessors for these diagnostics.
+- [x] Implement post-estimation diagnostics (blueprint §2.8). (2025-02-24)
+	- [x] Implement standardized parameter estimates (std.lv, std.all). (2025-02-24)
+	- [x] Implement model-implied covariance/means and residuals. (2025-02-24)
+	- [x] Implement modification indices (approximate via gradients). (2025-02-24)
+- [x] Refactor LikelihoodDriver to decouple ModelObjective and Covariance Factory. (2025-02-24)
+	- [x] Extract `ModelObjective` class to `cpp/src/libsemx/model_objective.cpp` and `cpp/include/libsemx/model_objective.hpp`.
+	- [x] Move covariance factory logic (`create_covariance_structure`, `build_covariance_positive_mask`) to `cpp/src/libsemx/covariance_structure.cpp`.
+	- [x] Clean up `LikelihoodDriver` to remove duplicate code and unused constants.
+- [x] Implement non-Gaussian outcome families (blueprint §2.4). (2025-12-12)
+	- [x] Add `BinomialOutcome` (logit/probit), `PoissonOutcome`, `NegativeBinomialOutcome`.
+	- [x] Implement Laplace approximation for these families in `LikelihoodDriver`.
+	- [x] Add tests for GLMM scenarios.
+- [x] Implement Full Information Maximum Likelihood (FIML) for missing data (blueprint §2.6). (2025-12-12)
+	- [x] Update `LikelihoodDriver` to handle `NaN` in observed data by filtering indices per row/cluster.
+	- [x] Ensure `OutcomeFamily` subclasses handle missingness correctly (usually by just skipping the contribution).
+	- [x] Add tests with missing data patterns.
+- [x] Implement standard errors and fit statistics for model parameters (blueprint §2.8). (2025-12-12)
+	- [x] Add `FitResult` struct to C++ core (replacing or extending `OptimizationResult`) containing parameter estimates, SEs, vcov matrix, and fit indices (AIC, BIC).
+	- [x] Implement numerical Hessian computation (finite differences) for the marginal log-likelihood in `LikelihoodDriver` as a post-fit step.
+	- [x] Expose `FitResult` to Python and R bindings.
+	- [x] Update Python `semx.Model.fit()` and R `semx_model` to return/print summary with SEs and p-values.
+	- [x] Add integration tests verifying SEs against known results (e.g., `lme4` or `lavaan` benchmarks).
+- [x] Extend ModelGraph + IR parameter registry so structural equations, constraints, and parameter metadata match blueprint §§2.2–3.2. Tests: `ctest --test-dir build -R "model_graph"`, `ctest --test-dir build -R "likelihood_driver"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "model_graph or fit"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
 	- [x] Introduce a central parameter catalog that maps edge IDs and covariance specs to `Parameter` objects plus transforms, then thread it through `LikelihoodDriver::fit`.
 	- [x] Restore the default identity design fallback for scaled-fixed random effects so the GRM/fixed covariance fixtures keep passing after the catalog refactor. (2025-12-01)
 	- [x] Expand `ModelGraph` to store regressions/loadings/covariances directly and serialize them into ModelIR so bindings share one source of truth (parameter specs recorded with constraint metadata surfaced through Python/R bindings). (2025-12-12)
@@ -15,14 +115,16 @@
 	- [x] Implement the new covariance classes plus factory wiring and gradient hooks, preserving positive-definite parameterizations.
 	- [x] Add finite-difference gradient probes in Catch2 along with Laplace fit scenarios that mix the new structures with existing ones.
 	- [x] Mirror the fixtures via Python/R tests that serialize IR payloads using the new covariance identifiers.
-- [ ] Complete the survival and competing-risks stack by adding exponential, lognormal, and loglogistic AFT outcomes plus CIF-aware cause-specific families (blueprint §7). Tests: `ctest --test-dir build -R "survival"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "survival"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
-	- [ ] Implement the additional outcome families with analytic derivatives and shared dispersion handling.
-	- [ ] Extend `LikelihoodDriver::evaluate_model_loglik_full` scenarios (C++/Python/R) to cover censored data and CIF calculations.
-	- [ ] Document the new families in README/examples and add deterministic fixtures for multi-cause survival payloads.
-- [ ] Build ergonomic Python and R front-end APIs that translate user formulas/arguments into the shared IR, keeping bindings thin (blueprint §§8–10). Tests: `PYTHONPATH=build uv run pytest python/semx/tests -k "api"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`, `ctest --test-dir build -R "likelihood_driver"`. (2025-12-01)
-	- [ ] Introduce `semx.Model` (Python) and matching R S3 constructor that accept formula-style specs, random-effect declarations, and covariance definitions, then emit IR for C++.
-	- [ ] Add integration tests proving Python/R front-ends round-trip the existing Laplace, Kronecker, and survival fixtures through the bindings.
-	- [ ] Update documentation/examples to walk through the new APIs and ensure CI instructions reference the front-end tests.
+- [x] Complete the survival and competing-risks stack by adding exponential, lognormal, and loglogistic AFT outcomes plus CIF-aware cause-specific families (blueprint §7). Tests: `ctest --test-dir build -R "survival"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "survival"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
+	- [x] Implement the additional outcome families with analytic derivatives and shared dispersion handling (shared-dispersion broadcast wired through LikelihoodDriver helpers).
+	- [x] Extend `LikelihoodDriver::evaluate_model_loglik_full` scenarios (C++/Python/R) to cover censored data and CIF calculations; add analytic helper assertions plus R bindings tests mirroring the C++/Python fixtures. (2025-12-01)
+	- [x] Document the new families in README/examples and add deterministic fixtures for multi-cause survival payloads (`python/README.md`, `docs/examples/survival_cif.md`). (2025-12-01)
+	- [x] Ensure the survival unit/integration tests participate in `ctest -R "survival"` and tighten their analytic assertions so we catch regressions in the existing Weibull/Exponential/Lognormal/Loglogistic paths. (2025-12-01)
+- [x] Build ergonomic Python and R front-end APIs that translate user formulas/arguments into the shared IR, keeping bindings thin (blueprint §§8–10). Tests: `PYTHONPATH=build uv run pytest python/semx/tests -k "api"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`, `ctest --test-dir build -R "likelihood_driver"`. (2025-12-01)
+	- [x] Introduce `semx.Model` (Python) and matching R S3 constructor that accept formula-style specs, random-effect declarations, and covariance definitions, then emit IR for C++ (2025-12-15).
+	- [x] Add integration tests proving Python/R front-ends round-trip the existing Laplace, Kronecker, and survival fixtures through the bindings.
+	- [x] Update documentation/examples to walk through the new APIs and ensure CI instructions reference the front-end tests (python/README.md, docs/examples/formula_frontend.md). (2025-12-15)
+		- Front-end parser tests: `PYTHONPATH=build uv run pytest python/semx/tests -k model_api`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat', filter = 'bindings')"` (2025-12-15)
 - [x] Validate Ordinal (probit) Laplace gradients with threshold transforms so categorical families stay aligned with blueprint §§3.6 & 6.2. Tests: `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "laplace_gradient"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
 	- [x] Add a Catch2 finite-difference probe for an ordinal mixed model (3-category probit with random intercept) to guard the C++ core. (2025-12-01)
 	- [x] Mirror the ordinal gradient check through Python bindings with the same IR payload and finite differences. (2025-12-01)

@@ -9,7 +9,7 @@
 #include <vector>
 #include <unordered_map>
 
-TEST_CASE("LikelihoodDriver evaluates Competing Risks Model", "[survival][competing_risks]") {
+TEST_CASE("LikelihoodDriver evaluates survival Competing Risks Model", "[survival][competing_risks]") {
     // Competing risks: Two causes of failure.
     // Modeled as two cause-specific hazard functions.
     // T_1 ~ Weibull(k1, lambda1), T_2 ~ Weibull(k2, lambda2)

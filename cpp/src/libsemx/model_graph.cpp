@@ -55,7 +55,15 @@ void ModelGraph::add_edge(EdgeKind kind, std::string source, std::string target,
         throw std::invalid_argument("edge target not registered: " + target);
     }
     if (!parameter_id.empty() && !is_numeric_literal(parameter_id)) {
-        register_parameter(parameter_id, ParameterConstraint::Free, kDefaultCoefficientInit);
+        double init = kDefaultCoefficientInit;
+        ParameterConstraint constraint = ParameterConstraint::Free;
+        
+        if (kind == EdgeKind::Covariance && source == target) {
+            init = 0.5;
+            constraint = ParameterConstraint::Positive;
+        }
+        
+        register_parameter(parameter_id, constraint, init);
     }
     edges_.push_back(EdgeSpec{kind, std::move(source), std::move(target), std::move(parameter_id)});
 }

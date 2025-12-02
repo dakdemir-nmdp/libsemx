@@ -79,3 +79,47 @@ TEST_CASE("LikelihoodDriver evaluates loglogistic survival outcomes", "[survival
 
     REQUIRE_THAT(loglik, Catch::Matchers::WithinRel(expected, 1e-10));
 }
+
+TEST_CASE("LikelihoodDriver accumulates CIF-style competing risks across survival families", "[survival][likelihood_driver][cif]") {
+    libsemx::ModelIRBuilder builder;
+    builder.add_variable("cause_lognormal", libsemx::VariableKind::Observed, "lognormal");
+    builder.add_variable("cause_loglogistic", libsemx::VariableKind::Observed, "loglogistic");
+    auto model = builder.build();
+
+    const std::vector<double> times = {1.4, 2.1, 3.5};
+    std::unordered_map<std::string, std::vector<double>> data{
+        {"cause_lognormal", times},
+        {"cause_loglogistic", times}
+    };
+    std::unordered_map<std::string, std::vector<double>> predictors{
+        {"cause_lognormal", {0.2, -0.1, 0.3}},
+        {"cause_loglogistic", {-0.2, 0.4, 0.1}}
+    };
+    std::unordered_map<std::string, std::vector<double>> dispersions{
+        {"cause_lognormal", {0.9, 1.1, 0.8}},
+        {"cause_loglogistic", {1.2, 1.0, 1.1}}
+    };
+    std::unordered_map<std::string, std::vector<double>> status{
+        {"cause_lognormal", {1.0, 0.0, 0.0}},
+        {"cause_loglogistic", {0.0, 1.0, 0.0}}
+    };
+
+    libsemx::LikelihoodDriver driver;
+    const double loglik = driver.evaluate_model_loglik(model, data, predictors, dispersions, {}, status);
+
+    libsemx::LognormalOutcome lognormal;
+    libsemx::LogLogisticOutcome loglogistic;
+    double expected = 0.0;
+    expected += manual_loglik(lognormal,
+                              data["cause_lognormal"],
+                              predictors["cause_lognormal"],
+                              dispersions["cause_lognormal"],
+                              status["cause_lognormal"]);
+    expected += manual_loglik(loglogistic,
+                              data["cause_loglogistic"],
+                              predictors["cause_loglogistic"],
+                              dispersions["cause_loglogistic"],
+                              status["cause_loglogistic"]);
+
+    REQUIRE_THAT(loglik, Catch::Matchers::WithinRel(expected, 1e-10));
+}

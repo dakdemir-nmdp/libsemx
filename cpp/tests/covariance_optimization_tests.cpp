@@ -91,7 +91,7 @@ TEST_CASE("LikelihoodDriver optimizes covariance parameters", "[optimization][mi
     auto result = driver.fit(model, data, options, "lbfgs");
     
     // If covariance parameters were included, we should see them in the result.
-    // But result.parameters is a vector, and we don't know the mapping.
+    // But result.optimization_result.parameters is a vector, and we don't know the mapping.
     // Wait, OptimizationResult doesn't seem to return parameter names?
     // Let's check LikelihoodDriver::fit return type.
 }

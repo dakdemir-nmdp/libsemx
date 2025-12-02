@@ -5,7 +5,7 @@
 
 #include <cmath>
 
-TEST_CASE("ExponentialOutcome matches the Weibull special case", "[survival][exponential_outcome]") {
+TEST_CASE("ExponentialOutcome survival contributions match the Weibull special case", "[survival][exponential_outcome]") {
     libsemx::ExponentialOutcome expo;
 
     const double t = 2.0;
@@ -41,7 +41,7 @@ TEST_CASE("ExponentialOutcome matches the Weibull special case", "[survival][exp
 
     SECTION("Dispersion contract") {
         REQUIRE_FALSE(expo.has_dispersion());
-        REQUIRE(expo.default_dispersion(3) == Catch::Approx(1.0));
+        REQUIRE(expo.default_dispersion(3) == 1.0);
     }
 
     SECTION("Input validation") {

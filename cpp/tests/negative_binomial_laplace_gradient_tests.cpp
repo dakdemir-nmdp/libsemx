@@ -13,7 +13,7 @@ namespace {
 libsemx::ModelIR build_negative_binomial_model() {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "negative_binomial");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_nb", "diagonal", 1);
@@ -48,11 +48,11 @@ TEST_CASE("Negative binomial Laplace gradients match finite differences", "[lapl
     options.learning_rate = 0.1;
 
     auto result = driver.fit(model, data, options, "lbfgs");
-    REQUIRE(result.converged);
-    REQUIRE(result.parameters.size() == 2);
+    REQUIRE(result.optimization_result.converged);
+    REQUIRE(result.optimization_result.parameters.size() == 2);
 
-    const double beta = result.parameters[0];
-    const double sigma = result.parameters[1];
+    const double beta = result.optimization_result.parameters[0];
+    const double sigma = result.optimization_result.parameters[1];
 
     auto linear_predictors = std::unordered_map<std::string, std::vector<double>>{{"y", {}}};
     for (double value : data.at("x")) {

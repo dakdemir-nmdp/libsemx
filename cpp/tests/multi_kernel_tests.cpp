@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <vector>
 #include <unordered_map>
 #include <string>
@@ -117,4 +118,42 @@ TEST_CASE("LikelihoodDriver handles multi_kernel covariance", "[likelihood_drive
     );
 
     REQUIRE(loglik == Catch::Approx(expected_loglik));
+}
+
+TEST_CASE("MultiKernelCovariance: Simplex weights", "[covariance][mkl]") {
+    std::vector<double> K1 = {1.0, 0.0, 0.0, 1.0};
+    std::vector<double> K2 = {1.0, 1.0, 1.0, 1.0};
+    
+    libsemx::MultiKernelCovariance cov({K1, K2}, 2, true); // simplex_weights = true
+
+    REQUIRE(cov.parameter_count() == 3);
+
+    // Params: sigma=2.0, theta1=0.0, theta2=0.0
+    // Weights: exp(0)/(exp(0)+exp(0)) = 0.5 each.
+    std::vector<double> params = {2.0, 0.0, 0.0};
+    auto mat = cov.materialize(params);
+    
+    // Matrix = 2.0 * (0.5*K1 + 0.5*K2) = K1 + K2 = [[2, 1], [1, 2]]
+    REQUIRE_THAT(mat[0], Catch::Matchers::WithinRel(2.0));
+    REQUIRE_THAT(mat[1], Catch::Matchers::WithinRel(1.0));
+    REQUIRE_THAT(mat[2], Catch::Matchers::WithinRel(1.0));
+    REQUIRE_THAT(mat[3], Catch::Matchers::WithinRel(2.0));
+    
+    // Gradients
+    auto analytic = cov.parameter_gradients(params);
+    double eps = 1e-6;
+    for (size_t i = 0; i < params.size(); ++i) {
+        std::vector<double> p_plus = params;
+        std::vector<double> p_minus = params;
+        p_plus[i] += eps;
+        p_minus[i] -= eps;
+        
+        auto m_plus = cov.materialize(p_plus);
+        auto m_minus = cov.materialize(p_minus);
+        
+        for (size_t j = 0; j < m_plus.size(); ++j) {
+            double num_grad = (m_plus[j] - m_minus[j]) / (2 * eps);
+            REQUIRE_THAT(analytic[i][j], Catch::Matchers::WithinRel(num_grad, 1e-4));
+        }
+    }
 }

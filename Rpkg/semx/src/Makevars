@@ -10,10 +10,12 @@ SOURCES = model_graph.cpp \
           covariance_structure.cpp \
           kronecker_covariance.cpp \
           fixed_covariance.cpp \
+          genomic_kernel.cpp \
           scaled_fixed_covariance.cpp \
           multi_kernel_covariance.cpp \
           gaussian_outcome.cpp \
           binomial_outcome.cpp \
+          poisson_outcome.cpp \
           negative_binomial_outcome.cpp \
           weibull_outcome.cpp \
           exponential_outcome.cpp \
@@ -23,6 +25,8 @@ SOURCES = model_graph.cpp \
           model_ir.cpp \
           optimizer.cpp \
           likelihood_driver.cpp \
-          outcome_family_factory.cpp
+          model_objective.cpp \
+          outcome_family_factory.cpp \
+          post_estimation.cpp
 
 OBJECTS = r_bindings.o RcppExports.o $(SOURCES:.cpp=.o)

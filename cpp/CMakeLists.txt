@@ -6,6 +6,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(EIGEN_BUILD_TESTING OFF CACHE BOOL "Disable Eigen testing" FORCE)
+set(EIGEN_BUILD_DOC OFF CACHE BOOL "Disable Eigen documentation" FORCE)
+set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "Disable Eigen pkgconfig" FORCE)
+
 include(FetchContent)
 
 add_library(libsemx STATIC
@@ -15,11 +19,13 @@ add_library(libsemx STATIC
     src/libsemx/parameter_catalog.cpp
     src/libsemx/covariance_structure.cpp
     src/libsemx/kronecker_covariance.cpp
+    src/libsemx/genomic_kernel.cpp
     src/libsemx/fixed_covariance.cpp
     src/libsemx/scaled_fixed_covariance.cpp
     src/libsemx/multi_kernel_covariance.cpp
     src/libsemx/gaussian_outcome.cpp
     src/libsemx/binomial_outcome.cpp
+    src/libsemx/poisson_outcome.cpp
     src/libsemx/negative_binomial_outcome.cpp
     src/libsemx/weibull_outcome.cpp
     src/libsemx/exponential_outcome.cpp
@@ -29,7 +35,9 @@ add_library(libsemx STATIC
     src/libsemx/model_ir.cpp
     src/libsemx/optimizer.cpp
     src/libsemx/likelihood_driver.cpp
+    src/libsemx/model_objective.cpp
     src/libsemx/outcome_family_factory.cpp
+    src/libsemx/post_estimation.cpp
 )
 
 target_include_directories(libsemx
@@ -63,7 +71,15 @@ FetchContent_Declare(
     GIT_TAG v0.3.0
 )
 
+# Disable testing for dependencies
+set(BUILD_TESTING_SAVED ${BUILD_TESTING})
+set(BUILD_TESTING OFF)
+set(EIGEN_BUILD_TESTING OFF CACHE BOOL "Disable Eigen testing" FORCE)
+
 FetchContent_MakeAvailable(Catch2 Eigen3 LBFGSpp)
+
+# Restore testing for our project
+set(BUILD_TESTING ${BUILD_TESTING_SAVED})
 
 target_link_libraries(libsemx PUBLIC Eigen3::Eigen lbfgspp)
 
@@ -81,6 +97,7 @@ add_executable(libsemx_tests
     tests/model_graph_tests.cpp
     tests/gaussian_outcome_tests.cpp
     tests/binomial_outcome_tests.cpp
+    tests/poisson_outcome_tests.cpp
     tests/mixed_model_tests.cpp
     tests/weibull_outcome_tests.cpp
     tests/exponential_outcome_tests.cpp
@@ -98,15 +115,21 @@ add_executable(libsemx_tests
     tests/reml_tests.cpp
     tests/laplace_tests.cpp
     tests/kronecker_covariance_tests.cpp
+    tests/fit_statistics_tests.cpp
+    tests/fiml_tests.cpp
     tests/kronecker_laplace_gradient_tests.cpp
     tests/negative_binomial_laplace_gradient_tests.cpp
     tests/ordinal_laplace_gradient_tests.cpp
     tests/grm_tests.cpp
     tests/multi_kernel_tests.cpp
     tests/analytic_gradient_tests.cpp
+    tests/dispersion_gradient_tests.cpp
+    tests/reml_plumbing_tests.cpp
     tests/covariance_optimization_tests.cpp
     tests/fixed_covariance_fit_tests.cpp
     tests/mixed_model_gradient_tests.cpp
+    tests/post_estimation_tests.cpp
+    tests/sem_gradient_tests.cpp
 )
 
 target_link_libraries(libsemx_tests
