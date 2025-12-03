@@ -24,6 +24,9 @@ public:
 
     [[nodiscard]] std::vector<double> gradient(const std::vector<double>& parameters) const override;
 
+    [[nodiscard]] double value_and_gradient(const std::vector<double>& parameters,
+                                            std::vector<double>& gradient) const override;
+
     [[nodiscard]] const std::vector<std::string>& parameter_names() const;
 
     [[nodiscard]] std::vector<double> initial_parameters() const;

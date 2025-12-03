@@ -1,0 +1,178 @@
+---
+title: "MDP Genomic Analysis with semx"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Assuming semx is installed. If running from source dev environment, 
+# one might need devtools::load_all("Rpkg/semx")
+tryCatch(library(semx), error = function(e) {
+  message("semx package not found. Attempting to load from source...")
+  if (file.exists("../../Rpkg/semx")) {
+    devtools::load_all("../../Rpkg/semx")
+  } else {
+    stop("Could not load semx package.")
+  }
+})
+library(dplyr)
+library(readr)
+```
+
+## 1. Load and Preprocess Data
+
+We load the numeric SNP data and phenotype data.
+
+```{r load_data}
+# Adjust paths as needed
+numeric_df <- read_csv("../../data/mdp_numeric.csv", show_col_types = FALSE)
+traits_df <- read_csv("../../data/mdp_traits.csv", show_col_types = FALSE)
+
+cat("Numeric DF dim:", dim(numeric_df), "\n")
+cat("Traits DF dim:", dim(traits_df), "\n")
+
+# Rename Taxa to taxa in traits_df for consistency
+traits_df <- traits_df %>% rename(taxa = Taxa)
+
+# Ensure taxa is character
+numeric_df$taxa <- as.character(numeric_df$taxa)
+traits_df$taxa <- as.character(traits_df$taxa)
+
+# Merge datasets
+merged_df <- inner_join(numeric_df, traits_df, by = "taxa")
+
+# Drop rows with missing EarHT
+merged_df <- merged_df %>% filter(!is.na(EarHT))
+
+cat("Merged DF dim:", dim(merged_df), "\n")
+
+# Sort by taxa
+merged_df <- merged_df %>% arrange(taxa)
+
+# Extract Markers
+# Identify marker columns (all except taxa and traits)
+trait_cols <- c("taxa", "EarHT", "dpoll", "EarDia")
+marker_cols <- setdiff(names(numeric_df), "taxa")
+
+M <- as.matrix(merged_df[, marker_cols])
+cat("Marker Matrix dim:", dim(M), "\n")
+
+# Standardize Phenotype
+merged_df$EarHT_std <- scale(merged_df$EarHT)
+```
+
+## 2. Define Genomic Model
+
+We define the mixed model:
+$$ y = \mu + u + e $$
+
+```{r define_model}
+# Define the model
+# Note: In R, we pass the marker matrix in the genomic list.
+model <- semx_model(
+  equations = c("EarHT_std ~ 1"),
+  families = c(EarHT_std = "gaussian"),
+  genomic = list(
+    polygenic = list(
+      markers = M,
+      structure = "grm"
+    )
+  ),
+  random_effects = list(
+    list(
+      name = "u",
+      variables = c("taxa"),
+      covariance = "polygenic"
+    )
+  )
+)
+```
+
+## 3. Fit Model and Analyze Results
+
+```{r fit_model}
+# Fit the model
+fit <- semx_fit(model, merged_df)
+
+# Display Summary
+summary(fit)
+
+# Extract Variance Components
+params <- fit$parameter_estimates
+print(params)
+
+# Calculate Heritability
+# Identify sigma_g^2 (polygenic) and sigma_e^2 (residual)
+# Note: Parameter names might vary based on implementation details.
+# We look for the parameter associated with the 'polygenic' covariance.
+
+# Helper to find parameter by partial name
+get_param <- function(p, pattern) {
+  matches <- grep(pattern, names(p), value = TRUE)
+  if (length(matches) > 0) return(p[[matches[1]]])
+  return(0)
+}
+
+sigma_g2 <- get_param(params, "polygenic")
+# For Gaussian, residual is often the dispersion parameter
+sigma_e_param <- get_param(params, "EarHT_std") 
+# If it's sigma (std dev), square it. If it's variance/phi, use as is.
+# Assuming it's sigma for now based on typical semx behavior.
+sigma_e2 <- sigma_e_param^2
+
+h2 <- sigma_g2 / (sigma_g2 + sigma_e2)
+cat("\nEstimated Heritability (h^2):", h2, "\n")
+```
+
+## 4. Using Precomputed Covariance Matrices
+
+We can also compute the GRM manually in R and pass it to `semx_model`.
+
+```{r precomputed_grm}
+# 1. Compute GRM manually
+# Center markers
+M_mean <- colMeans(M)
+Z <- sweep(M, 2, M_mean, "-")
+
+# Calculate denominator
+p <- M_mean / 2.0
+denom <- 2.0 * sum(p * (1.0 - p))
+
+# Compute K
+K <- tcrossprod(Z) / denom
+
+cat("Computed GRM dim:", dim(K), "\n")
+cat("GRM diagonal mean:", mean(diag(K)), "\n")
+
+# 2. Define model with precomputed kernel
+model_pre <- semx_model(
+  equations = c("EarHT_std ~ 1"),
+  families = c(EarHT_std = "gaussian"),
+  genomic = list(
+    polygenic_pre = list(
+      data = K,           # Pass the precomputed matrix
+      structure = "grm"
+    )
+  ),
+  random_effects = list(
+    list(
+      name = "u_pre",
+      variables = c("taxa"),
+      covariance = "polygenic_pre"
+    )
+  )
+)
+
+# 3. Fit the model
+fit_pre <- semx_fit(model_pre, merged_df)
+
+# Compare results
+params_pre <- fit_pre$parameter_estimates
+sigma_g2_pre <- get_param(params_pre, "polygenic_pre")
+sigma_e_param_pre <- get_param(params_pre, "EarHT_std")
+sigma_e2_pre <- sigma_e_param_pre^2
+h2_pre <- sigma_g2_pre / (sigma_g2_pre + sigma_e2_pre)
+
+cat("\nHeritability (Precomputed):", h2_pre, "\n")
+cat("Difference:", abs(h2 - h2_pre), "\n")
+```

@@ -28,7 +28,7 @@
     - [x] Updated `SemFitSummary` (Python) to display covariance weights and use parameter names from C++.
     - [x] Fixed C++ `build_covariance_positive_mask` for `multi_kernel_simplex`.
     - [x] Exposed `parameter_names` in `FitResult` via bindings.
-- [ ] Extend optimizers and fit indices.
+- [x] Extend optimizers and fit indices. (2025-02-24)
     - [x] Implement CFI, TLI, RMSEA, and SRMR fit indices in C++ and expose to bindings. (2025-02-24)
     - [x] Add variance component extraction methods. (2025-02-24)
     - [x] Explore/expose additional optimizer settings (e.g., line search parameters). (2025-02-24)
@@ -37,6 +37,10 @@
     - [x] Ensure this metadata is preserved through the bindings and available in `summary()`.
 
 ## Completed
+- [x] Support precomputed covariance matrices in Python and R front-ends. (2025-02-24)
+    - [x] Updated `semx.Model` (Python) to accept `data` in genomic specs.
+    - [x] Updated `semx_model` (R) to accept `data` in genomic specs.
+    - [x] Updated MDP analysis notebooks to demonstrate usage.
 - [x] Add higher-level GS/trait×env builders. (2025-02-24)
     - [x] Create easy-to-use builders for G×E models (e.g., `semx.gxe_model(...)`).
     - [x] Support multi-environment trial (MET) data structures.

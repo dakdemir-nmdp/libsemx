@@ -45,9 +45,20 @@ OptimizationResult GradientDescentOptimizer::optimize(const ObjectiveFunction& f
     std::vector<double> candidate_gradient(result.parameters.size());
 
     for (std::size_t iter = 0; iter < options.max_iterations; ++iter) {
-        const auto gradient = function.gradient(result.parameters);
+        std::vector<double> gradient(result.parameters.size());
+        double objective = 0.0;
+        bool fused_ok = false;
+        try {
+            objective = function.value_and_gradient(result.parameters, gradient);
+            fused_ok = true;
+        } catch (...) {
+            // Fallback to separate calls if fused evaluation is not implemented
+        }
+        if (!fused_ok) {
+            gradient = function.gradient(result.parameters);
+            objective = function.value(result.parameters);
+        }
         const double grad_norm = norm2(gradient);
-        const double objective = function.value(result.parameters);
 
         result.iterations = iter + 1;
         result.gradient_norm = grad_norm;
@@ -66,8 +77,17 @@ OptimizationResult GradientDescentOptimizer::optimize(const ObjectiveFunction& f
             for (std::size_t i = 0; i < result.parameters.size(); ++i) {
                 candidate[i] = result.parameters[i] - step * gradient[i];
             }
-            candidate_objective = function.value(candidate);
-            candidate_gradient = function.gradient(candidate);
+            bool candidate_fused = false;
+            try {
+                candidate_objective = function.value_and_gradient(candidate, candidate_gradient);
+                candidate_fused = true;
+            } catch (...) {
+                // Ignore fused failure, keep separate evaluations
+            }
+            if (!candidate_fused) {
+                candidate_gradient = function.gradient(candidate);
+                candidate_objective = function.value(candidate);
+            }
             candidate_grad_norm = norm2(candidate_gradient);
             if (candidate_objective <= objective || candidate_grad_norm < grad_norm) {
                 accepted = true;
@@ -108,14 +128,14 @@ public:
 
     double operator()(const Eigen::VectorXd& x, Eigen::VectorXd& grad) {
         std::vector<double> params(x.data(), x.data() + x.size());
-        double value = function_.value(params);
-        std::vector<double> g = function_.gradient(params);
-        
+        std::vector<double> g(grad.size());
+        double value = function_.value_and_gradient(params, g);
+
         if (g.size() != static_cast<std::size_t>(grad.size())) {
              throw std::runtime_error("Gradient dimension mismatch");
         }
         for(std::size_t i=0; i<g.size(); ++i) grad[i] = g[i];
-        
+
         return value;
     }
 

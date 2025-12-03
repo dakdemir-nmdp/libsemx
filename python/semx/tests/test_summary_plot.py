@@ -36,6 +36,7 @@ class MockModelIR:
             EdgeSpec(EdgeKind.Regression, "x", "y", "beta")
         ]
         self.covariances = []
+        self.variables = []
 
 @pytest.fixture
 def mock_sem_fit():

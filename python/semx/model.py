@@ -550,7 +550,44 @@ class Model:
         self._fixed_covariance_cache: Optional[Dict[str, List[List[float]]]] = None
         self._ir: Optional[ModelIR] = None
         self._parse_equations()
+        self._add_default_latent_covariances()
         self._register_random_effect_variables()
+
+    def _add_default_latent_covariances(self) -> None:
+        """Add default variances and covariances for latent variables."""
+        latents = [v for v in self._variables.values() if v.kind == VariableKind.Latent]
+        if not latents:
+            return
+        
+        print(f"Adding default covariances for {len(latents)} latents")
+
+        # 1. Ensure variances (L ~~ L)
+        for var in latents:
+            has_variance = False
+            for edge in self._edges:
+                if edge.kind == EdgeKind.Covariance and edge.source == var.name and edge.target == var.name:
+                    has_variance = True
+                    break
+            if not has_variance:
+                self._add_covariance(var.name, var.name)
+
+        # 2. Ensure covariances (L1 ~~ L2) for all pairs
+        # Only if both are exogenous? In CFA, all latents are usually exogenous.
+        # For now, let's add covariances between all pairs of latents.
+        # Users can fix them to 0 if they want orthogonality.
+        for i in range(len(latents)):
+            for j in range(i + 1, len(latents)):
+                l1 = latents[i]
+                l2 = latents[j]
+                has_covariance = False
+                for edge in self._edges:
+                    if edge.kind == EdgeKind.Covariance:
+                        if (edge.source == l1.name and edge.target == l2.name) or \
+                           (edge.source == l2.name and edge.target == l1.name):
+                            has_covariance = True
+                            break
+                if not has_covariance:
+                    self._add_covariance(l1.name, l2.name)
 
     def to_ir(self) -> ModelIR:
         """Materialize the shared IR structure (cached after first build)."""
@@ -650,6 +687,15 @@ class Model:
             data_dict = data.to_dict(orient="list")
         else:
             data_dict = dict(data)
+
+        # Filter out non-numeric columns to avoid pybind11 conversion errors
+        # C++ expects std::unordered_map<std::string, std::vector<double>>
+        keys_to_remove = []
+        for k, v in data_dict.items():
+            if v and isinstance(v[0], str):
+                keys_to_remove.append(k)
+        for k in keys_to_remove:
+            del data_dict[k]
 
         # Inject intercept column if needed
         if self._uses_intercept_column and "_intercept" not in data_dict:
@@ -929,52 +975,62 @@ class Model:
         specs: Dict[str, Dict[str, Any]] = {}
         for cov_id, payload in genomic.items():
             raw_markers = payload.get("markers")
-            if raw_markers is None:
-                raise ModelSpecificationError(f"Genomic covariance '{cov_id}' requires a 'markers' matrix")
+            raw_data = payload.get("data")
+            
+            if raw_markers is None and raw_data is None:
+                raise ModelSpecificationError(f"Genomic covariance '{cov_id}' requires 'markers' or 'data' matrix")
             
             structure = payload.get("structure", "grm")
             is_multi = "multi_kernel" in structure
             
+            # Determine if we are using precomputed data or markers
+            using_precomputed = raw_data is not None
+            source_data = raw_data if using_precomputed else raw_markers
+            
             marker_list = []
             if is_multi:
-                if not isinstance(raw_markers, list):
+                if not isinstance(source_data, list):
                      # It might be a single array, but user wants multi_kernel (maybe just 1 kernel)
                      # But usually multi_kernel implies list.
                      # If it's a numpy array, it's a single matrix.
-                     if hasattr(raw_markers, "ndim") and raw_markers.ndim == 2:
-                         marker_list = [np.asarray(raw_markers, dtype=float)]
+                     if hasattr(source_data, "ndim") and source_data.ndim == 2:
+                         marker_list = [np.asarray(source_data, dtype=float)]
                      else:
-                         raise ModelSpecificationError(f"Multi-kernel covariance '{cov_id}' requires a list of marker matrices")
+                         raise ModelSpecificationError(f"Multi-kernel covariance '{cov_id}' requires a list of matrices")
                 else:
-                     marker_list = [np.asarray(m, dtype=float) for m in raw_markers]
+                     marker_list = [np.asarray(m, dtype=float) for m in source_data]
             else:
                 # Single matrix expected
-                if isinstance(raw_markers, list) and len(raw_markers) > 0 and hasattr(raw_markers[0], "ndim"):
+                if isinstance(source_data, list) and len(source_data) > 0 and hasattr(source_data[0], "ndim"):
                      # User passed list of matrices but structure is not multi_kernel?
                      # Assume first one or error?
                      # Let's assume single matrix.
-                     marker_list = [np.asarray(raw_markers, dtype=float)]
+                     marker_list = [np.asarray(source_data, dtype=float)]
                 else:
-                     marker_list = [np.asarray(raw_markers, dtype=float)]
+                     marker_list = [np.asarray(source_data, dtype=float)]
 
             # Validate dimensions
             if not marker_list:
-                 raise ModelSpecificationError(f"Genomic covariance '{cov_id}' has no markers")
+                 raise ModelSpecificationError(f"Genomic covariance '{cov_id}' has no data")
                  
             dim = marker_list[0].shape[0]
             for m in marker_list:
                 if m.ndim != 2:
-                    raise ModelSpecificationError(f"Genomic covariance '{cov_id}' markers must be a non-empty 2D array")
+                    raise ModelSpecificationError(f"Genomic covariance '{cov_id}' data must be a non-empty 2D array")
                 if m.shape[0] != dim:
-                     raise ModelSpecificationError(f"Genomic covariance '{cov_id}' markers dimension mismatch")
+                     raise ModelSpecificationError(f"Genomic covariance '{cov_id}' data dimension mismatch")
 
-            precomputed = bool(payload.get("precomputed", False))
-            if precomputed:
+            # If using precomputed data, ensure it's square
+            if using_precomputed:
                 for m in marker_list:
                     if m.shape[0] != m.shape[1]:
                         raise ModelSpecificationError(
                             f"Genomic covariance '{cov_id}' precomputed kernel must be square"
                         )
+
+            # Check explicit precomputed flag from payload, default to True if using 'data'
+            precomputed = bool(payload.get("precomputed", using_precomputed))
+            
             specs[cov_id] = {
                 "markers": marker_list,
                 "structure": structure,

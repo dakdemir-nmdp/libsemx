@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <iostream>
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/outcome_family_factory.hpp"
 #include "libsemx/covariance_structure.hpp"
@@ -1009,6 +1011,136 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
     }
 
     if (obs_family_name == "gaussian") {
+        // Check for block-diagonal optimization
+        bool can_optimize_blocks = false;
+        std::string common_grouping_var;
+        if (!random_effect_infos.empty()) {
+            can_optimize_blocks = true;
+            common_grouping_var = random_effect_infos[0].grouping_var;
+            if (common_grouping_var.empty()) {
+                 can_optimize_blocks = false;
+            } else {
+                for (size_t k = 1; k < random_effect_infos.size(); ++k) {
+                    if (random_effect_infos[k].grouping_var != common_grouping_var) {
+                        can_optimize_blocks = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (can_optimize_blocks) {
+            // Optimized path for block-diagonal covariance
+            auto group_map = build_group_map(random_effect_infos[0], data, n);
+            
+            // Prepare REML structures if needed
+            std::vector<double> Xt_Vinv_X;
+            std::size_t p_reml = 0;
+            if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+                p_reml = fixed_effect_vars.size();
+                Xt_Vinv_X.assign(p_reml * p_reml, 0.0);
+            }
+
+            double total_loglik = 0.0;
+
+            for (const auto& [group_id, all_indices] : group_map) {
+                // Filter for observed data
+                std::vector<std::size_t> indices;
+                indices.reserve(all_indices.size());
+                for(auto idx : all_indices) {
+                    if (!std::isnan(obs_data[idx])) {
+                        indices.push_back(idx);
+                    }
+                }
+                
+                if (indices.empty()) continue;
+                
+                std::size_t n_i = indices.size();
+                std::vector<double> V_i(n_i * n_i, 0.0);
+                std::vector<double> resid_i(n_i);
+                
+                // Initialize V_i with dispersion and resid_i
+                for (std::size_t r = 0; r < n_i; ++r) {
+                    std::size_t idx = indices[r];
+                    resid_i[r] = obs_data[idx] - pred_data[idx];
+                    V_i[r * n_i + r] = disp_data[idx];
+                }
+                
+                // Add random effects
+                for (const auto& info : random_effect_infos) {
+                    auto Z_i_full = build_design_matrix(info, indices, data, linear_predictors);
+                    std::size_t q = info.cov_spec->dimension;
+                    
+                    // Z_i_full is n_i x q
+                    // Compute Z G Z^T
+                    Eigen::Map<const RowMajorMatrix> Z_map(Z_i_full.data(), n_i, q);
+                    Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
+                    Eigen::Map<RowMajorMatrix> V_map(V_i.data(), n_i, n_i);
+                    V_map += Z_map * G_map * Z_map.transpose();
+                }                
+                // Factorize V_i
+                std::vector<double> L_i(n_i * n_i);
+                cholesky(n_i, V_i, L_i);
+                double log_det_i = log_det_cholesky(n_i, L_i);
+                std::vector<double> alpha_i = solve_cholesky(n_i, L_i, resid_i);
+                std::vector<double> V_inv_i = invert_from_cholesky(n_i, L_i);
+                
+                double quad_form_i = 0.0;
+                for (std::size_t k = 0; k < n_i; ++k) {
+                    quad_form_i += resid_i[k] * alpha_i[k];
+                }
+                
+                total_loglik -= 0.5 * (n_i * log_2pi + log_det_i + quad_form_i);
+                
+                // REML Accumulation
+                if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+                    std::vector<double> X_i(n_i * p_reml);
+                    for (std::size_t j = 0; j < p_reml; ++j) {
+                        const auto& vec = data.at(fixed_effect_vars[j]);
+                        for (std::size_t r = 0; r < n_i; ++r) {
+                            X_i[r * p_reml + j] = vec[indices[r]];
+                        }
+                    }
+                    
+                    std::vector<double> Vinv_X_i(n_i * p_reml, 0.0);
+                    for (std::size_t c = 0; c < p_reml; ++c) {
+                        for (std::size_t r = 0; r < n_i; ++r) {
+                            double sum = 0.0;
+                            for (std::size_t k = 0; k < n_i; ++k) {
+                                sum += V_inv_i[r * n_i + k] * X_i[k * p_reml + c];
+                            }
+                            Vinv_X_i[r * p_reml + c] = sum;
+                        }
+                    }
+                    
+                    for (std::size_t r = 0; r < p_reml; ++r) {
+                        for (std::size_t c = 0; c < p_reml; ++c) {
+                            double sum = 0.0;
+                            for (std::size_t k = 0; k < n_i; ++k) {
+                                sum += X_i[k * p_reml + r] * Vinv_X_i[k * p_reml + c];
+                            }
+                            Xt_Vinv_X[r * p_reml + c] += sum;
+                        }
+                    }
+                }
+            }
+            
+            // Finalize REML
+            if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+                std::vector<double> L_reml(p_reml * p_reml);
+                try {
+                    cholesky(p_reml, Xt_Vinv_X, L_reml);
+                    double log_det_reml = log_det_cholesky(p_reml, L_reml);
+                    total_loglik -= 0.5 * log_det_reml;
+                    total_loglik += 0.5 * static_cast<double>(p_reml) * log_2pi;
+                } catch (...) {
+                    return -std::numeric_limits<double>::infinity();
+                }
+            }
+            
+            return total_loglik;
+        }
+
         std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
         group_maps.reserve(random_effect_infos.size());
         for (const auto& info : random_effect_infos) {
@@ -1674,6 +1806,871 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
 
         return gradients;
     }
+}
+
+std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::evaluate_model_loglik_and_gradient(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+    const std::unordered_map<std::string, std::vector<double>>& dispersions,
+    const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+    const std::unordered_map<std::string, std::vector<double>>& status,
+    const std::unordered_map<std::string, std::vector<double>>& extra_params,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    EstimationMethod method,
+    const std::unordered_map<std::string, DataParamMapping>& data_param_mappings,
+    const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings) const {
+
+    std::unordered_map<std::string, double> gradients;
+    double total_loglik = 0.0;
+
+    if (model.random_effects.empty()) {
+        // Pre-process edges for efficient lookup: target -> [(source, param_id)]
+        std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> incoming_edges;
+        std::unordered_map<std::string, std::string> dispersion_params;
+
+        for (const auto& edge : model.edges) {
+            if (edge.kind == EdgeKind::Regression && !edge.parameter_id.empty()) {
+                incoming_edges[edge.target].emplace_back(edge.source, edge.parameter_id);
+            } else if (edge.kind == EdgeKind::Covariance && edge.source == edge.target && !edge.parameter_id.empty()) {
+                dispersion_params[edge.source] = edge.parameter_id;
+            }
+        }
+
+        for (const auto& var : model.variables) {
+            if (var.kind != VariableKind::Observed) continue;
+
+            auto data_it = data.find(var.name);
+            auto pred_it = linear_predictors.find(var.name);
+            auto disp_it = dispersions.find(var.name);
+            if (data_it == data.end() || pred_it == linear_predictors.end() || disp_it == dispersions.end()) {
+                continue;
+            }
+
+            const auto& obs = data_it->second;
+            const auto& preds = pred_it->second;
+            const auto& disps = disp_it->second;
+            if (obs.size() != preds.size()) {
+                throw std::invalid_argument("Data vectors for variable " + var.name + " have mismatched sizes");
+            }
+            if (disps.empty()) {
+                throw std::invalid_argument("Dispersion vector for variable " + var.name + " is empty");
+            }
+            if (disps.size() != obs.size() && disps.size() != 1) {
+                throw std::invalid_argument("Dispersion vector for variable " + var.name + " must have size 1 or match observation count");
+            }
+            const bool shared_dispersion = disps.size() == 1;
+            const double shared_dispersion_value = shared_dispersion ? disps.front() : 0.0;
+
+            const std::vector<double>* status_vec = nullptr;
+            if (status.count(var.name)) status_vec = &status.at(var.name);
+
+            const std::vector<double>* extra_vec = nullptr;
+            if (extra_params.count(var.name)) extra_vec = &extra_params.at(var.name);
+            const std::vector<double>& ep = extra_vec ? *extra_vec : std::vector<double>{};
+
+            auto family = OutcomeFamilyFactory::create(var.family);
+            const auto& edges = incoming_edges[var.name];
+            std::string disp_param_id;
+            if (dispersion_params.count(var.name)) {
+                disp_param_id = dispersion_params.at(var.name);
+            }
+
+            for (std::size_t i = 0; i < obs.size(); ++i) {
+                if (std::isnan(obs[i])) {
+                    continue;
+                }
+                double s = status_vec ? (*status_vec)[i] : 1.0;
+                const double dispersion_value = shared_dispersion ? shared_dispersion_value : disps[i];
+                auto eval = family->evaluate(obs[i], preds[i], dispersion_value, s, ep);
+                total_loglik += eval.log_likelihood;
+                double d_lp = eval.first_derivative; // d(loglik)/d(eta)
+
+                for (const auto& edge : edges) {
+                    const std::string& source = edge.first;
+                    const std::string& param_id = edge.second;
+
+                    double source_val = 0.0;
+                    if (data.count(source)) {
+                        source_val = data.at(source)[i];
+                    }
+
+                    gradients[param_id] += d_lp * source_val;
+                }
+
+                if (!disp_param_id.empty()) {
+                    gradients[disp_param_id] += eval.d_dispersion;
+                }
+            }
+
+            // REML adjustment (log-likelihood only)
+            if (method == EstimationMethod::REML && var.family == "gaussian") {
+                std::vector<std::string> predictors;
+                for (const auto& edge : model.edges) {
+                    if (edge.kind == EdgeKind::Regression && edge.target == var.name) {
+                        predictors.push_back(edge.source);
+                    }
+                }
+                std::sort(predictors.begin(), predictors.end());
+                if (!predictors.empty()) {
+                    std::size_t n = obs.size();
+                    std::size_t p = predictors.size();
+                    std::vector<double> X(n * p);
+                    for (std::size_t j = 0; j < p; ++j) {
+                        auto it = data.find(predictors[j]);
+                        if (it == data.end() || it->second.size() != n) {
+                            continue;
+                        }
+                        for (std::size_t i = 0; i < n; ++i) {
+                            X[i * p + j] = it->second[i];
+                        }
+                    }
+
+                    std::vector<double> Xt_Vinv_X(p * p, 0.0);
+                    for (std::size_t r = 0; r < p; ++r) {
+                        for (std::size_t c = 0; c < p; ++c) {
+                            double sum = 0.0;
+                            for (std::size_t i = 0; i < n; ++i) {
+                                if (std::isnan(obs[i])) continue;
+                                double disp = shared_dispersion ? shared_dispersion_value : disps[i];
+                                sum += X[i * p + r] * X[i * p + c] / disp;
+                            }
+                            Xt_Vinv_X[r * p + c] = sum;
+                        }
+                    }
+
+                    std::vector<double> L_reml(p * p);
+                    cholesky(p, Xt_Vinv_X, L_reml);
+                    double log_det_reml = log_det_cholesky(p, L_reml);
+                    double log_2pi = std::log(2.0 * 3.14159265358979323846);
+                    total_loglik -= 0.5 * log_det_reml;
+                    total_loglik += 0.5 * static_cast<double>(p) * log_2pi;
+                }
+            }
+        }
+        return {total_loglik, gradients};
+    }
+
+    // Mixed model logic
+    auto random_effect_infos = build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, true);
+    if (random_effect_infos.empty()) {
+        throw std::runtime_error("Random effect metadata missing");
+    }
+
+    std::string obs_var_name;
+    std::string obs_family_name;
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Observed) {
+            bool is_target = false;
+            for (const auto& edge : model.edges) {
+                if (edge.target == var.name) {
+                    is_target = true;
+                    break;
+                }
+            }
+            if (is_target || obs_var_name.empty()) {
+                obs_var_name = var.name;
+                obs_family_name = var.family;
+            }
+        }
+    }
+    if (obs_var_name.empty()) {
+        throw std::runtime_error("No observed variable found");
+    }
+
+    auto pred_it = linear_predictors.find(obs_var_name);
+    if (pred_it == linear_predictors.end()) {
+        if (linear_predictors.size() == 1) {
+            obs_var_name = linear_predictors.begin()->first;
+            auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
+                return v.name == obs_var_name;
+            });
+            if (var_it == model.variables.end()) {
+                throw std::runtime_error("Outcome variable metadata not found: " + obs_var_name);
+            }
+            obs_family_name = var_it->family;
+            pred_it = linear_predictors.begin();
+        } else {
+            throw std::runtime_error("Linear predictors for outcome variable not found");
+        }
+    }
+    const auto& pred_data = pred_it->second;
+
+    auto obs_it = data.find(obs_var_name);
+    if (obs_it == data.end()) {
+        throw std::runtime_error("Observed variable not found in data: " + obs_var_name);
+    }
+    const auto& obs_data = obs_it->second;
+
+    if (obs_data.size() != pred_data.size()) {
+        throw std::runtime_error("Outcome data and predictors have mismatched sizes");
+    }
+    std::size_t n = obs_data.size();
+
+    auto disp_it = dispersions.find(obs_var_name);
+    if (disp_it == dispersions.end()) {
+        throw std::runtime_error("Dispersions not found for: " + obs_var_name);
+    }
+    const auto& disp_raw = disp_it->second;
+    if (disp_raw.empty()) {
+        throw std::runtime_error("Dispersion vector is empty");
+    }
+    std::vector<double> disp_broadcast;
+    const std::vector<double>* disp_ptr = &disp_raw;
+    if (disp_raw.size() == 1) {
+        disp_broadcast.assign(n, disp_raw.front());
+        disp_ptr = &disp_broadcast;
+    } else if (disp_raw.size() != n) {
+        throw std::runtime_error("Dispersion vector has mismatched size");
+    }
+    const auto& disp_data = *disp_ptr;
+
+    const double log_2pi = std::log(2.0 * 3.14159265358979323846);
+
+    // Identify fixed effect predictors for REML adjustments
+    std::vector<std::string> fixed_effect_vars;
+    if (method == EstimationMethod::REML) {
+        for (const auto& edge : model.edges) {
+            if (edge.kind == EdgeKind::Regression && edge.target == obs_var_name) {
+                fixed_effect_vars.push_back(edge.source);
+            }
+        }
+        std::sort(fixed_effect_vars.begin(), fixed_effect_vars.end());
+    }
+
+    if (obs_family_name == "gaussian") {
+        // Check for block-diagonal optimization
+        bool can_optimize_blocks = false;
+        std::string common_grouping_var;
+        if (!random_effect_infos.empty()) {
+            can_optimize_blocks = true;
+            common_grouping_var = random_effect_infos[0].grouping_var;
+            if (common_grouping_var.empty()) {
+                 can_optimize_blocks = false;
+            } else {
+                for (size_t k = 1; k < random_effect_infos.size(); ++k) {
+                    if (random_effect_infos[k].grouping_var != common_grouping_var) {
+                        can_optimize_blocks = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (can_optimize_blocks) {
+            // Optimized path for block-diagonal covariance with pattern grouping
+            auto group_map = build_group_map(random_effect_infos[0], data, n);
+            
+            // Prepare REML structures if needed
+            std::vector<double> Xt_Vinv_X;
+            std::size_t p_reml = 0;
+            if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+                p_reml = fixed_effect_vars.size();
+                Xt_Vinv_X.assign(p_reml * p_reml, 0.0);
+            }
+
+            // Group by missingness pattern
+            std::map<std::vector<std::size_t>, std::vector<std::size_t>> patterns;
+            for (const auto& [group_id, all_indices] : group_map) {
+                std::vector<std::size_t> indices;
+                indices.reserve(all_indices.size());
+                for(auto idx : all_indices) {
+                    if (!std::isnan(obs_data[idx])) {
+                        indices.push_back(idx);
+                    }
+                }
+                if (indices.empty()) continue;
+                
+                std::vector<std::size_t> relative_indices;
+                relative_indices.reserve(indices.size());
+                std::size_t group_start = all_indices[0];
+                for (auto idx : indices) {
+                    relative_indices.push_back(idx - group_start);
+                }
+                patterns[relative_indices].push_back(group_id);
+            }
+
+            for (const auto& [rel_indices, group_ids] : patterns) {
+                std::size_t n_i = rel_indices.size();
+                std::size_t rep_group_id = group_ids[0];
+                const auto& rep_all_indices = group_map[rep_group_id];
+                std::vector<std::size_t> rep_indices;
+                rep_indices.reserve(n_i);
+                for (auto rel_idx : rel_indices) {
+                    rep_indices.push_back(rep_all_indices[rel_idx]);
+                }
+                
+                // Build V_i for representative
+                std::vector<double> V_i(n_i * n_i, 0.0);
+                for (std::size_t r = 0; r < n_i; ++r) {
+                    std::size_t idx = rep_indices[r];
+                    V_i[r * n_i + r] = disp_data[idx];
+                }
+                
+                for (const auto& info : random_effect_infos) {
+                    auto Z_i_full = build_design_matrix(info, rep_indices, data, linear_predictors);
+                    std::size_t q = info.cov_spec->dimension;
+                    Eigen::Map<const RowMajorMatrix> Z_map(Z_i_full.data(), n_i, q);
+                    Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
+                    Eigen::Map<RowMajorMatrix> V_map(V_i.data(), n_i, n_i);
+                    V_map += Z_map * G_map * Z_map.transpose();
+                }
+                
+                std::vector<double> L_i(n_i * n_i);
+                cholesky(n_i, V_i, L_i);
+                double log_det_i = log_det_cholesky(n_i, L_i);
+                std::vector<double> V_inv_i = invert_from_cholesky(n_i, L_i);
+                Eigen::Map<const RowMajorMatrix> V_inv_map(V_inv_i.data(), n_i, n_i);
+                
+                // Precompute matrices for gradients if needed
+                struct PatternCache {
+                    std::vector<double> Vinv_Z; // n_i * q
+                    std::vector<double> A;      // q * q
+                };
+                std::vector<PatternCache> caches(random_effect_infos.size());
+                
+                for (size_t k=0; k<random_effect_infos.size(); ++k) {
+                    const auto& info = random_effect_infos[k];
+                    if (info.G_gradients.empty() && info.design_vars.empty()) continue;
+                    
+                    auto Z_i_full = build_design_matrix(info, rep_indices, data, linear_predictors);
+                    std::size_t q = info.cov_spec->dimension;
+                    
+                    caches[k].Vinv_Z.resize(n_i * q);
+                    Eigen::Map<RowMajorMatrix> Vinv_Z_map(caches[k].Vinv_Z.data(), n_i, q);
+                    Eigen::Map<const RowMajorMatrix> Z_map(Z_i_full.data(), n_i, q);
+                    Vinv_Z_map = V_inv_map * Z_map;
+                    
+                    caches[k].A.resize(q * q);
+                    Eigen::Map<RowMajorMatrix> A_map(caches[k].A.data(), q, q);
+                    A_map = Z_map.transpose() * Vinv_Z_map;
+                }
+
+                // Accumulate over groups in pattern
+                for (auto gid : group_ids) {
+                    const auto& all_ind = group_map[gid];
+                    std::vector<double> resid(n_i);
+                    for (std::size_t r = 0; r < n_i; ++r) {
+                        std::size_t idx = all_ind[rel_indices[r]];
+                        resid[r] = obs_data[idx] - pred_data[idx];
+                    }
+                    Eigen::Map<Eigen::VectorXd> r_vec(resid.data(), n_i);
+                    
+                    // alpha = V^-1 * r
+                    Eigen::VectorXd alpha = V_inv_map * r_vec;
+                    
+                    double quad_form = r_vec.dot(alpha);
+                    total_loglik -= 0.5 * (n_i * log_2pi + log_det_i + quad_form);
+                    
+                    // Gradients
+                    
+                    // 1. Dispersion
+                    if (!dispersion_param_mappings.empty()) {
+                        auto map_it = dispersion_param_mappings.find(obs_var_name);
+                        if (map_it != dispersion_param_mappings.end()) {
+                            const auto& mapping = map_it->second;
+                            for (std::size_t r = 0; r < n_i; ++r) {
+                                std::size_t global_idx = all_ind[rel_indices[r]];
+                                size_t pat_idx = global_idx % mapping.stride;
+                                if (pat_idx < mapping.pattern.size()) {
+                                    const std::string& pid = mapping.pattern[pat_idx];
+                                    if (!pid.empty()) {
+                                        double term1 = V_inv_i[r * n_i + r];
+                                        double term2 = alpha(r) * alpha(r);
+                                        gradients[pid] += 0.5 * (term2 - term1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 2. Fixed Effects
+                    for (const auto& edge : model.edges) {
+                        if (edge.kind == EdgeKind::Regression && edge.target == obs_var_name && !edge.parameter_id.empty()) {
+                            if (data.count(edge.source)) {
+                                const auto& src_vec = data.at(edge.source);
+                                double grad_accum = 0.0;
+                                for (std::size_t r = 0; r < n_i; ++r) {
+                                    grad_accum += alpha(r) * src_vec[all_ind[rel_indices[r]]];
+                                }
+                                gradients[edge.parameter_id] += grad_accum;
+                            }
+                        }
+                    }
+                    
+                    // 3. Covariance & Loadings
+                    for (size_t k=0; k<random_effect_infos.size(); ++k) {
+                        const auto& info = random_effect_infos[k];
+                        std::size_t q = info.cov_spec->dimension;
+                        
+                        Eigen::Map<const RowMajorMatrix> Vinv_Z_map(caches[k].Vinv_Z.data(), n_i, q);
+                        Eigen::VectorXd b = Vinv_Z_map.transpose() * r_vec;
+                        
+                        // dL/dG
+                        for (std::size_t idx = 0; idx < info.G_gradients.size(); ++idx) {
+                            std::string param_name = info.covariance_id + "_" + std::to_string(idx);
+                            const auto& dG = info.G_gradients[idx];
+                            Eigen::Map<const RowMajorMatrix> dG_map(dG.data(), q, q);
+                            Eigen::Map<const RowMajorMatrix> A_map(caches[k].A.data(), q, q);
+                            
+                            double term1 = b.transpose() * dG_map * b;
+                            double term2 = (A_map * dG_map).trace();
+                            gradients[param_name] += 0.5 * (term1 - term2);
+                        }
+                        
+                        // dL/dZ
+                        bool need_Z_grad = false;
+                        for (const auto& var_name : info.design_vars) {
+                            if (data_param_mappings.count(var_name)) {
+                                need_Z_grad = true;
+                                break;
+                            }
+                        }
+                        
+                        if (need_Z_grad) {
+                            Eigen::MatrixXd M = alpha * b.transpose() - Vinv_Z_map;
+                            Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
+                            Eigen::MatrixXd dLdZ = M * G_map;
+                            
+                            for (std::size_t c = 0; c < q; ++c) {
+                                const std::string& var_name = info.design_vars[c];
+                                auto map_it = data_param_mappings.find(var_name);
+                                if (map_it != data_param_mappings.end()) {
+                                    const auto& mapping = map_it->second;
+                                    for (std::size_t r = 0; r < n_i; ++r) {
+                                        std::size_t global_idx = all_ind[rel_indices[r]];
+                                        size_t pat_idx = global_idx % mapping.stride;
+                                        if (pat_idx < mapping.pattern.size()) {
+                                            const std::string& pid = mapping.pattern[pat_idx];
+                                            if (!pid.empty()) {
+                                                gradients[pid] += dLdZ(r, c);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // REML
+                    if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+                        std::vector<double> X_i(n_i * p_reml);
+                        for (std::size_t j = 0; j < p_reml; ++j) {
+                            const auto& vec = data.at(fixed_effect_vars[j]);
+                            for (std::size_t r = 0; r < n_i; ++r) {
+                                X_i[r * p_reml + j] = vec[all_ind[rel_indices[r]]];
+                            }
+                        }
+                        Eigen::Map<const RowMajorMatrix> X_map(X_i.data(), n_i, p_reml);
+                        Eigen::Map<RowMajorMatrix> Xt_Vinv_X_map(Xt_Vinv_X.data(), p_reml, p_reml);
+                        Xt_Vinv_X_map += X_map.transpose() * V_inv_map * X_map;
+                    }
+                }
+            }
+            
+            if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+                std::vector<double> L_reml(p_reml * p_reml);
+                try {
+                    cholesky(p_reml, Xt_Vinv_X, L_reml);
+                    double log_det_reml = log_det_cholesky(p_reml, L_reml);
+                    total_loglik -= 0.5 * log_det_reml;
+                    total_loglik += 0.5 * static_cast<double>(p_reml) * log_2pi;
+                } catch (...) {
+                    return {-std::numeric_limits<double>::infinity(), gradients};
+                }
+            }
+            
+            return {total_loglik, gradients};
+        }
+
+        std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
+        group_maps.reserve(random_effect_infos.size());
+        for (const auto& info : random_effect_infos) {
+            group_maps.push_back(build_group_map(info, data, n));
+        }
+
+        std::vector<double> V_full(n * n, 0.0);
+        for (std::size_t i = 0; i < n; ++i) {
+            V_full[i * n + i] = disp_data[i];
+        }
+
+        for (std::size_t re_idx = 0; re_idx < random_effect_infos.size(); ++re_idx) {
+            const auto& info = random_effect_infos[re_idx];
+            const auto& groups = group_maps[re_idx];
+            for (const auto& [_, indices] : groups) {
+                auto Z_i = build_design_matrix(info, indices, data, linear_predictors);
+                std::size_t n_i = indices.size();
+                std::size_t q = info.cov_spec->dimension;
+
+                std::vector<double> ZG(n_i * q, 0.0);
+                for (std::size_t r = 0; r < n_i; ++r) {
+                    for (std::size_t c = 0; c < q; ++c) {
+                        double sum = 0.0;
+                        for (std::size_t k = 0; k < q; ++k) {
+                            sum += Z_i[r * q + k] * info.G_matrix[k * q + c];
+                        }
+                        ZG[r * q + c] = sum;
+                    }
+                }
+
+                for (std::size_t r = 0; r < n_i; ++r) {
+                    for (std::size_t c = 0; c < n_i; ++c) {
+                        double sum = 0.0;
+                        for (std::size_t k = 0; k < q; ++k) {
+                            sum += ZG[r * q + k] * Z_i[c * q + k];
+                        }
+                        V_full[indices[r] * n + indices[c]] += sum;
+                    }
+                }
+            }
+        }
+
+        // Handle missing data by subsetting
+        std::vector<std::size_t> observed_indices;
+        observed_indices.reserve(n);
+        std::vector<int> original_to_subset(n, -1);
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!std::isnan(obs_data[i])) {
+                original_to_subset[i] = observed_indices.size();
+                observed_indices.push_back(i);
+            }
+        }
+        std::size_t n_obs = observed_indices.size();
+
+        std::vector<double> V_sub(n_obs * n_obs);
+        std::vector<double> resid_sub(n_obs);
+        for (std::size_t r = 0; r < n_obs; ++r) {
+            resid_sub[r] = obs_data[observed_indices[r]] - pred_data[observed_indices[r]];
+            for (std::size_t c = 0; c < n_obs; ++c) {
+                V_sub[r * n_obs + c] = V_full[observed_indices[r] * n + observed_indices[c]];
+            }
+        }
+
+        std::vector<double> L(n_obs * n_obs);
+        cholesky(n_obs, V_sub, L);
+        double log_det = log_det_cholesky(n_obs, L);
+        std::vector<double> alpha = solve_cholesky(n_obs, L, resid_sub);
+        std::vector<double> V_inv = invert_from_cholesky(n_obs, L);
+
+        double quad_form = 0.0;
+        for (std::size_t i = 0; i < n_obs; ++i) {
+            quad_form += resid_sub[i] * alpha[i];
+        }
+
+        total_loglik = -0.5 * (n_obs * log_2pi + log_det + quad_form);
+
+        if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
+            std::size_t p = fixed_effect_vars.size();
+            std::vector<double> X_sub(n_obs * p);
+            for (std::size_t j = 0; j < p; ++j) {
+                auto it = data.find(fixed_effect_vars[j]);
+                if (it == data.end() || it->second.size() != n) {
+                    throw std::runtime_error("Missing data for fixed effect: " + fixed_effect_vars[j]);
+                }
+                for (std::size_t i = 0; i < n_obs; ++i) {
+                    X_sub[i * p + j] = it->second[observed_indices[i]];
+                }
+            }
+
+            std::vector<double> Vinv_X(n_obs * p, 0.0);
+            for (std::size_t col = 0; col < p; ++col) {
+                for (std::size_t row = 0; row < n_obs; ++row) {
+                    double sum = 0.0;
+                    for (std::size_t k = 0; k < n_obs; ++k) {
+                        sum += V_inv[row * n_obs + k] * X_sub[k * p + col];
+                    }
+                    Vinv_X[row * p + col] = sum;
+                }
+            }
+
+            std::vector<double> Xt_Vinv_X(p * p, 0.0);
+            for (std::size_t r = 0; r < p; ++r) {
+                for (std::size_t c = 0; c < p; ++c) {
+                    double sum = 0.0;
+                    for (std::size_t row = 0; row < n_obs; ++row) {
+                        sum += X_sub[row * p + r] * Vinv_X[row * p + c];
+                    }
+                    Xt_Vinv_X[r * p + c] = sum;
+                }
+            }
+
+            std::vector<double> L_reml(p * p);
+            cholesky(p, Xt_Vinv_X, L_reml);
+            double log_det_reml = log_det_cholesky(p, L_reml);
+            total_loglik -= 0.5 * log_det_reml;
+            total_loglik += 0.5 * static_cast<double>(p) * log_2pi;
+        }
+
+        // Gradients
+        for (const auto& edge : model.edges) {
+            if (edge.kind != EdgeKind::Regression || edge.target != obs_var_name || edge.parameter_id.empty()) {
+                continue;
+            }
+            if (!data.count(edge.source)) {
+                continue;
+            }
+            const auto& src_vec = data.at(edge.source);
+            double accum = 0.0;
+            for (std::size_t i = 0; i < n_obs; ++i) {
+                accum += src_vec[observed_indices[i]] * alpha[i];
+            }
+            gradients[edge.parameter_id] += accum;
+        }
+
+        // Gradients for dispersions (residual variances)
+        if (!dispersion_param_mappings.empty()) {
+            auto map_it = dispersion_param_mappings.find(obs_var_name);
+            if (map_it != dispersion_param_mappings.end()) {
+                const auto& mapping = map_it->second;
+                for (std::size_t i = 0; i < n_obs; ++i) {
+                    std::size_t original_idx = observed_indices[i];
+                    size_t idx = original_idx % mapping.stride;
+                    if (idx < mapping.pattern.size()) {
+                        const std::string& pid = mapping.pattern[idx];
+                        if (!pid.empty()) {
+                            double dL_dsigma2 = 0.5 * (alpha[i] * alpha[i] - V_inv[i * n_obs + i]);
+                            gradients[pid] += dL_dsigma2;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (std::size_t re_idx = 0; re_idx < random_effect_infos.size(); ++re_idx) {
+            const auto& info = random_effect_infos[re_idx];
+
+            bool has_active_data = false;
+            for(const auto& v : info.design_vars) {
+                if(data_param_mappings.count(v)) { has_active_data = true; break; }
+            }
+
+            if (info.G_gradients.empty() && !has_active_data) continue;
+
+            const auto& groups = group_maps[re_idx];
+            for (const auto& [_, indices] : groups) {
+                auto Z_i = build_design_matrix(info, indices, data, linear_predictors);
+                std::size_t n_i = indices.size();
+                std::size_t q = info.cov_spec->dimension;
+
+                std::vector<double> temp(n_i * q, 0.0);
+                for (std::size_t r = 0; r < n_i; ++r) {
+                    int r_sub = original_to_subset[indices[r]];
+                    if (r_sub == -1) continue;
+
+                    for (std::size_t c = 0; c < q; ++c) {
+                        double sum = 0.0;
+                        for (std::size_t k = 0; k < n_i; ++k) {
+                            int k_sub = original_to_subset[indices[k]];
+                            if (k_sub != -1) {
+                                double term = alpha[r_sub] * alpha[k_sub] - V_inv[r_sub * n_obs + k_sub];
+                                sum += term * Z_i[k * q + c];
+                            }
+                        }
+                        temp[r * q + c] = sum;
+                    }
+                }
+
+                if (!info.G_gradients.empty()) {
+                    std::vector<double> M(q * q, 0.0);
+                    for (std::size_t r = 0; r < q; ++r) {
+                        for (std::size_t c = 0; c < q; ++c) {
+                            double sum = 0.0;
+                            for (std::size_t k = 0; k < n_i; ++k) {
+                                sum += Z_i[k * q + r] * temp[k * q + c];
+                            }
+                            M[r * q + c] = sum;
+                        }
+                    }
+
+                    for (std::size_t k = 0; k < info.G_gradients.size(); ++k) {
+                        const auto& dG = info.G_gradients[k];
+                        double trace = 0.0;
+                        for (std::size_t r = 0; r < q; ++r) {
+                            for (std::size_t c = 0; c < q; ++c) {
+                                trace += M[r * q + c] * dG[c * q + r];
+                            }
+                        }
+                        std::string param_name = info.covariance_id + "_" + std::to_string(k);
+                        gradients[param_name] += 0.5 * trace;
+                    }
+                }
+
+                if (has_active_data) {
+                    for (std::size_t r = 0; r < n_i; ++r) {
+                        for (std::size_t c = 0; c < q; ++c) {
+                            const std::string& var_name = info.design_vars[c];
+                            auto map_it = data_param_mappings.find(var_name);
+                            if (map_it != data_param_mappings.end()) {
+                                const auto& mapping = map_it->second;
+                                size_t idx = indices[r] % mapping.stride;
+                                if (idx < mapping.pattern.size()) {
+                                    const std::string& pid = mapping.pattern[idx];
+                                    if (!pid.empty()) {
+                                        double val = 0.0;
+                                        for (std::size_t k = 0; k < q; ++k) {
+                                            val += temp[r * q + k] * info.G_matrix[k * q + c];
+                                        }
+                                        gradients[pid] += val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return {total_loglik, gradients};
+    }
+
+    auto outcome_family = OutcomeFamilyFactory::create(obs_family_name);
+    auto status_it = status.find(obs_var_name);
+    const std::vector<double>* status_vec = nullptr;
+    if (status_it != status.end()) {
+        if (status_it->second.size() != n) {
+            throw std::runtime_error("Status vector has mismatched size");
+        }
+        status_vec = &status_it->second;
+    }
+    const auto& extra_vec = get_extra_params_for_variable(extra_params, obs_var_name);
+
+    LaplaceSystem system = build_laplace_system(random_effect_infos, data, linear_predictors, n);
+    if (system.total_dim == 0) {
+        throw std::runtime_error("Laplace system constructed without latent dimensions");
+    }
+
+    LaplaceSystemResult laplace_result;
+    if (!solve_laplace_system(system,
+                              obs_data,
+                              pred_data,
+                              disp_data,
+                              status_vec,
+                              extra_vec,
+                              *outcome_family,
+                              laplace_result)) {
+        return { -std::numeric_limits<double>::infinity(), gradients };
+    }
+
+    double log_prior = compute_prior_loglik(system, laplace_result, log_2pi);
+    double log_lik_data = 0.0;
+    for (const auto& eval : laplace_result.evaluations) {
+        log_lik_data += eval.log_likelihood;
+    }
+    double log_det_neg_hess = log_det_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
+    total_loglik = log_prior + log_lik_data + 0.5 * system.total_dim * log_2pi - 0.5 * log_det_neg_hess;
+
+    if (!dispersion_param_mappings.empty()) {
+        auto map_it = dispersion_param_mappings.find(obs_var_name);
+        if (map_it != dispersion_param_mappings.end()) {
+            const auto& mapping = map_it->second;
+            for (std::size_t i = 0; i < n; ++i) {
+                size_t idx = i % mapping.stride;
+                if (idx < mapping.pattern.size()) {
+                    const std::string& pid = mapping.pattern[idx];
+                    if (!pid.empty()) {
+                        gradients[pid] += laplace_result.evaluations[i].d_dispersion;
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<double> neg_hess_inv = invert_from_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
+    auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv);
+    std::vector<double> forcing(system.total_dim, 0.0);
+
+    for (const auto& edge : model.edges) {
+        if (edge.kind != EdgeKind::Regression || edge.target != obs_var_name || edge.parameter_id.empty()) {
+            continue;
+        }
+        auto src_it = data.find(edge.source);
+        if (src_it == data.end() || src_it->second.size() != n) {
+            continue;
+        }
+
+        const auto& src_vec = src_it->second;
+        std::vector<double> weights(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i) {
+            weights[i] = laplace_result.evaluations[i].second_derivative * src_vec[i];
+        }
+        accumulate_weighted_forcing(system, weights, forcing);
+        auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+        auto z_dot_du = project_observations(system, du);
+
+        double accum = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            const auto& eval = laplace_result.evaluations[i];
+            double logdet_adjust = src_vec[i] + z_dot_du[i];
+            accum += src_vec[i] * eval.first_derivative + 0.5 * eval.third_derivative * logdet_adjust * quad_terms[i];
+        }
+        gradients[edge.parameter_id] += accum;
+    }
+
+    struct CovarianceDerivativeCache {
+        std::string param_name;
+        std::vector<double> Ginv_dG_Ginv;
+        double trace_Ginv_dG;
+    };
+
+    std::unordered_map<std::string, std::vector<CovarianceDerivativeCache>> covariance_caches;
+    for (const auto& info : random_effect_infos) {
+        if (info.G_gradients.empty()) {
+            continue;
+        }
+        std::vector<CovarianceDerivativeCache> caches;
+        std::size_t q = info.cov_spec->dimension;
+        for (std::size_t idx = 0; idx < info.G_gradients.size(); ++idx) {
+            CovarianceDerivativeCache cache;
+            cache.param_name = info.covariance_id + "_" + std::to_string(idx);
+            auto temp = multiply_matrices(info.G_inverse, info.G_gradients[idx], q);
+            cache.Ginv_dG_Ginv = multiply_matrices(temp, info.G_inverse, q);
+            cache.trace_Ginv_dG = trace_product(info.G_inverse, info.G_gradients[idx], q);
+            caches.push_back(std::move(cache));
+        }
+        covariance_caches.emplace(info.covariance_id, std::move(caches));
+    }
+
+    const std::size_t Q = system.total_dim;
+    for (const auto& block : system.blocks) {
+        auto cache_it = covariance_caches.find(block.info->covariance_id);
+        if (cache_it == covariance_caches.end()) {
+            continue;
+        }
+
+        std::vector<double> u_block(block.q);
+        for (std::size_t j = 0; j < block.q; ++j) {
+            u_block[j] = laplace_result.u[block.offset + j];
+        }
+
+        for (const auto& cache : cache_it->second) {
+            auto block_forcing = multiply_matrix_vector(cache.Ginv_dG_Ginv, u_block, block.q);
+            std::fill(forcing.begin(), forcing.end(), 0.0);
+            for (std::size_t j = 0; j < block.q; ++j) {
+                forcing[block.offset + j] = block_forcing[j];
+            }
+            auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            auto z_dot_du = project_observations(system, du);
+
+            double logdet_adjust = 0.0;
+            for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
+                logdet_adjust += 0.5 * laplace_result.evaluations[obs_idx].third_derivative * z_dot_du[obs_idx] * quad_terms[obs_idx];
+            }
+
+            double prior_term = 0.5 * quadratic_form(u_block, cache.Ginv_dG_Ginv, block.q) - 0.5 * cache.trace_Ginv_dG;
+            double trace_term = 0.0;
+            for (std::size_t r = 0; r < block.q; ++r) {
+                for (std::size_t c = 0; c < block.q; ++c) {
+                    const std::size_t row_idx = block.offset + r;
+                    const std::size_t col_idx = block.offset + c;
+                    trace_term += neg_hess_inv[row_idx * Q + col_idx] * cache.Ginv_dG_Ginv[c * block.q + r];
+                }
+            }
+            double logdet_term = 0.5 * trace_term + logdet_adjust;
+            gradients[cache.param_name] += prior_term + logdet_term;
+        }
+    }
+
+    return {total_loglik, gradients};
 }
 
 namespace {

@@ -176,6 +176,12 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
 }
 
 std::vector<double> ModelObjective::gradient(const std::vector<double>& parameters) const {
+    std::vector<double> grad;
+    value_and_gradient(parameters, grad);
+    return grad;
+}
+
+double ModelObjective::value_and_gradient(const std::vector<double>& parameters, std::vector<double>& grad) const {
     const auto constrained = to_constrained(parameters);
     
     if (sem_mode_) {
@@ -286,7 +292,7 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
         }
         dispersion_param_mappings["_stacked_y"] = LikelihoodDriver::DataParamMapping{pattern, sem_outcomes_.size()};
 
-        auto grad_map = driver_.evaluate_model_gradient(
+        auto value_and_grad = driver_.evaluate_model_loglik_and_gradient(
             sem_model_,
             sem_data_,
             linear_predictors,
@@ -299,12 +305,11 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
             data_param_mappings,
             dispersion_param_mappings
         );
-        
-        std::vector<double> grad(parameters.size(), 0.0);
+        grad.assign(parameters.size(), 0.0);
         auto chain = catalog_.constrained_derivatives(parameters);
         
         // Map gradients back to parameters
-        for (const auto& [param_id, g] : grad_map) {
+        for (const auto& [param_id, g] : value_and_grad.second) {
             // Check if it's a covariance parameter gradient (e.g. _cov_latents_0)
             bool handled = false;
             for (const auto& mapping : sem_covariance_mappings_) {
@@ -330,7 +335,7 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
                 }
             }
         }
-        return grad;
+        return -value_and_grad.first;
     }
 
 
@@ -340,7 +345,7 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
 
     build_prediction_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
 
-    auto grad_map = driver_.evaluate_model_gradient(
+    auto value_and_grad = driver_.evaluate_model_loglik_and_gradient(
         model_,
         data_,
         linear_predictors,
@@ -351,15 +356,15 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
         fixed_covariance_data_,
         method_);
         
-    std::vector<double> grad(parameters.size(), 0.0);
+    grad.assign(parameters.size(), 0.0);
     auto chain = catalog_.constrained_derivatives(parameters);
-    for (const auto& [param_id, g] : grad_map) {
+    for (const auto& [param_id, g] : value_and_grad.second) {
         auto idx = catalog_.find_index(param_id);
         if (idx != ParameterCatalog::npos) {
             grad[idx] -= g * chain[idx];
         }
     }
-    return grad;
+    return -value_and_grad.first;
 }
 
 void ModelObjective::prepare_sem_structures() {

@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace libsemx {
@@ -64,6 +65,19 @@ public:
     };
 
     [[nodiscard]] std::unordered_map<std::string, double> evaluate_model_gradient(const ModelIR& model,
+                                                const std::unordered_map<std::string, std::vector<double>>& data,
+                                                const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+                                                const std::unordered_map<std::string, std::vector<double>>& dispersions,
+                                                const std::unordered_map<std::string, std::vector<double>>& covariance_parameters = {},
+                                                const std::unordered_map<std::string, std::vector<double>>& status = {},
+                                                const std::unordered_map<std::string, std::vector<double>>& extra_params = {},
+                                                const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
+                                                EstimationMethod method = EstimationMethod::ML,
+                                                const std::unordered_map<std::string, DataParamMapping>& data_param_mappings = {},
+                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {}) const;
+
+    [[nodiscard]] std::pair<double, std::unordered_map<std::string, double>> evaluate_model_loglik_and_gradient(
+                                                const ModelIR& model,
                                                 const std::unordered_map<std::string, std::vector<double>>& data,
                                                 const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
                                                 const std::unordered_map<std::string, std::vector<double>>& dispersions,

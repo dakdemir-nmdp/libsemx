@@ -190,7 +190,7 @@ std::vector<double> grm_kronecker_cpp(const Rcpp::NumericMatrix& left,
 
 } // namespace
 
-// Wrapper for ModelIRBuilder::add_variable to handle enum
+// Wrapper for ModelIRBuilder::add_variable
 void ModelIRBuilder_add_variable(ModelIRBuilder* builder, std::string name, int kind, std::string family, std::string label, std::string measurement_level) {
     builder->add_variable(name, static_cast<VariableKind>(kind), family, label, measurement_level);
 }
@@ -460,6 +460,9 @@ Rcpp::DataFrame compute_modification_indices_wrapper(
     );
 }
 
+std::unordered_map<std::string, std::vector<double>> get_fit_covariance_matrices(FitResult* obj) {
+    return obj->covariance_matrices;
+}
 
 RCPP_MODULE(semx) {
     class_<ModelIR>("ModelIR")
@@ -511,7 +514,7 @@ RCPP_MODULE(semx) {
         .field("tli", &FitResult::tli)
         .field("rmsea", &FitResult::rmsea)
         .field("srmr", &FitResult::srmr)
-        .field("covariance_matrices", &FitResult::covariance_matrices)
+        .property("covariance_matrices", &get_fit_covariance_matrices, "Get covariance matrices")
     ;
 
     class_<LikelihoodDriver>("LikelihoodDriver")

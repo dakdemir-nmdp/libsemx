@@ -8,7 +8,7 @@
 namespace libsemx {
 
 struct OptimizationOptions {
-    std::size_t max_iterations{100};
+    std::size_t max_iterations{1000};
     double tolerance{1e-6};
     double learning_rate{0.1};
     
@@ -35,6 +35,13 @@ public:
     [[nodiscard]] virtual double value(const std::vector<double>& parameters) const = 0;
 
     [[nodiscard]] virtual std::vector<double> gradient(const std::vector<double>& parameters) const = 0;
+
+    // Optional fused evaluation to avoid computing value and gradient separately.
+    [[nodiscard]] virtual double value_and_gradient(const std::vector<double>& parameters,
+                                                    std::vector<double>& gradient) const {
+        gradient = this->gradient(parameters);
+        return this->value(parameters);
+    }
 };
 
 class Optimizer {

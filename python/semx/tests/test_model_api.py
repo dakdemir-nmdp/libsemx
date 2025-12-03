@@ -25,7 +25,8 @@ def test_model_generates_ir_from_formulas():
     kinds = [edge.kind for edge in ir.edges]
     assert kinds.count(EdgeKind.Loading) == 2
     assert kinds.count(EdgeKind.Regression) == 3
-    assert kinds.count(EdgeKind.Covariance) == 1
+    # 1 explicit covariance (y1 ~~ y2) + 1 implicit latent variance (eta ~~ eta)
+    assert kinds.count(EdgeKind.Covariance) == 2
 
 
 def test_model_respects_explicit_kinds():

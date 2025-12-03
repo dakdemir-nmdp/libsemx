@@ -316,16 +316,29 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 		existing_ids <- vapply(covariances, function(x) x$name %||% "", character(1L))
 		for (cov_id in names(genomic)) {
 			entry <- genomic[[cov_id]]
-			if (is.null(entry$markers)) {
-				stop(sprintf("genomic covariance '%s' requires a 'markers' matrix", cov_id), call. = FALSE)
+			
+			raw_markers <- entry$markers
+			raw_data <- entry$data
+			
+			if (is.null(raw_markers) && is.null(raw_data)) {
+				stop(sprintf("genomic covariance '%s' requires 'markers' or 'data' matrix", cov_id), call. = FALSE)
 			}
-			markers <- as.matrix(entry$markers)
+			
+			using_precomputed <- !is.null(raw_data)
+			source_data <- if (using_precomputed) raw_data else raw_markers
+			
+			markers <- as.matrix(source_data)
 			if (!is.numeric(markers)) {
-				stop(sprintf("genomic covariance '%s' markers must be numeric", cov_id), call. = FALSE)
+				stop(sprintf("genomic covariance '%s' data must be numeric", cov_id), call. = FALSE)
 			}
 			if (nrow(markers) == 0L || ncol(markers) == 0L) {
-				stop(sprintf("genomic covariance '%s' markers must be non-empty", cov_id), call. = FALSE)
+				stop(sprintf("genomic covariance '%s' data must be non-empty", cov_id), call. = FALSE)
 			}
+			
+			if (using_precomputed && nrow(markers) != ncol(markers)) {
+				stop(sprintf("genomic covariance '%s' precomputed kernel must be square", cov_id), call. = FALSE)
+			}
+
 				if (cov_id %in% existing_ids) {
 					existing_dim <- covariances[[which(existing_ids == cov_id)[[1]]]]$dimension %||% NA_integer_
 					if (!is.na(existing_dim) && existing_dim != nrow(markers)) {
@@ -342,11 +355,14 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 				if (!(cov_id %in% existing_ids)) {
 					covariances <- c(covariances, list(list(name = cov_id, structure = structure_id, dimension = nrow(markers))))
 				}
+				
+				precomputed_flag <- if (is.null(entry$precomputed)) using_precomputed else isTRUE(entry$precomputed)
+				
 				genomic_data[[cov_id]] <- list(
 					markers = markers,
 					center = if (is.null(entry$center)) TRUE else isTRUE(entry$center),
 					normalize = if (is.null(entry$normalize)) TRUE else isTRUE(entry$normalize),
-					precomputed = if (is.null(entry$precomputed)) FALSE else isTRUE(entry$precomputed)
+					precomputed = precomputed_flag
 				)
 		}
 	}
@@ -368,7 +384,13 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 	builder <- new(ModelIRBuilder)
 	for (var_name in var_order) {
 		entry <- var_defs[[var_name]]
-		builder$add_variable(entry$name, entry$kind, entry$family)
+		builder$add_variable(
+			entry$name,
+			entry$kind,
+			entry$family,
+			entry$label %||% "",
+			entry$measurement_level %||% ""
+		)
 	}
 	for (edge in edges) {
 		builder$add_edge(edge$kind, edge$source, edge$target, edge$parameter_id)

@@ -13,9 +13,9 @@ test_that("grm_vanraden builds expected kernel", {
 
 build_nb_model <- function() {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "negative_binomial")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
+  builder$add_variable("y", 0, "negative_binomial", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_nb", "diagonal", 1)
   builder$add_random_effect("u_cluster", c("cluster"), "G_nb")
@@ -36,9 +36,9 @@ nb_dispersions <- function(n) {
 
 build_ordinal_model <- function() {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "ordinal")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
+  builder$add_variable("y", 0, "ordinal", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_ord", "diagonal", 1)
   builder$add_random_effect("u_cluster", c("cluster"), "G_ord")
@@ -59,13 +59,13 @@ ordinal_thresholds <- function() {
 
 build_kronecker_model <- function() {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
-  builder$add_variable("t1e1", 0, "gaussian")
-  builder$add_variable("t1e2", 0, "gaussian")
-  builder$add_variable("t2e1", 0, "gaussian")
-  builder$add_variable("t2e2", 0, "gaussian")
+  builder$add_variable("y", 0, "binomial", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
+  builder$add_variable("t1e1", 0, "gaussian", "", "")
+  builder$add_variable("t1e2", 0, "gaussian", "", "")
+  builder$add_variable("t2e1", 0, "gaussian", "", "")
+  builder$add_variable("t2e2", 0, "gaussian", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_kron", "multi_kernel", 4)
   builder$add_covariance("G_diag", "diagonal", 1)
@@ -124,12 +124,12 @@ test_that("ModelIRBuilder enforces graph invariants", {
   }, "must contain at least one variable")
 
   builder <- new(ModelIRBuilder)
-  expect_error(builder$add_variable("y", 0L, ""), "requires outcome family")
+  expect_error(builder$add_variable("y", 0L, "", "", ""), "requires outcome family")
 
-  builder$add_variable("y", 0L, "gaussian")
-  expect_error(builder$add_variable("y", 0L, "gaussian"), "duplicate variable name")
+  builder$add_variable("y", 0L, "gaussian", "", "")
+  expect_error(builder$add_variable("y", 0L, "gaussian", "", ""), "duplicate variable name")
 
-  builder$add_variable("eta", 1L, "")
+  builder$add_variable("eta", 1L, "", "", "")
   expect_error(builder$add_edge(1L, "eta", "missing", "beta"), "edge target not registered")
   expect_error(builder$add_edge(1L, "missing", "y", "beta"), "edge source not registered")
   expect_error(builder$add_edge(1L, "eta", "y", ""), "parameter id must be non-empty")
@@ -147,9 +147,9 @@ test_that("ModelIRBuilder enforces graph invariants", {
 
 test_that("ModelIR surfaces parameter identifiers", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0L, "gaussian")
-  builder$add_variable("x1", 1L, "")
-  builder$add_variable("x2", 1L, "")
+  builder$add_variable("y", 0L, "gaussian", "", "")
+  builder$add_variable("x1", 1L, "", "", "")
+  builder$add_variable("x2", 1L, "", "", "")
   builder$add_edge(1L, "x1", "y", "beta_x1")
   builder$add_edge(1L, "x2", "y", "beta_x2")
   builder$add_edge(1L, "x2", "y", "beta_x2")
@@ -182,11 +182,11 @@ test_that("semx_model compiles lavaan-style formulas", {
 
 test_that("Gaussian gradient alignment follows parameter registry", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0L, "gaussian")
-  builder$add_variable("intercept", 0L, "gaussian")
-  builder$add_variable("x1", 0L, "gaussian")
-  builder$add_variable("x2", 0L, "gaussian")
-  builder$add_variable("cluster", 2L, "")
+  builder$add_variable("y", 0L, "gaussian", "", "")
+  builder$add_variable("intercept", 0L, "gaussian", "", "")
+  builder$add_variable("x1", 0L, "gaussian", "", "")
+  builder$add_variable("x2", 0L, "gaussian", "", "")
+  builder$add_variable("cluster", 2L, "", "", "")
   builder$add_edge(1L, "intercept", "y", "beta_intercept")
   builder$add_edge(1L, "x1", "y", "beta_x1")
   builder$add_edge(1L, "x2", "y", "beta_x2")
@@ -270,7 +270,7 @@ test_that("Gaussian gradient alignment follows parameter registry", {
 
 test_that("ModelIRBuilder works", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "gaussian") # 0 = Observed
+  builder$add_variable("y", 0, "gaussian", "", "") # 0 = Observed
   
   model <- builder$build()
   expect_true(!is.null(model))
@@ -278,7 +278,7 @@ test_that("ModelIRBuilder works", {
 
 test_that("LikelihoodDriver evaluates lognormal survival outcomes via R bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0L, "lognormal")
+  builder$add_variable("y", 0L, "lognormal", "", "")
   model <- builder$build()
 
   data <- list(y = c(1.4, 2.2, 0.95))
@@ -312,7 +312,7 @@ test_that("LikelihoodDriver evaluates lognormal survival outcomes via R bindings
 
 test_that("LikelihoodDriver evaluates loglogistic survival outcomes via R bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0L, "loglogistic")
+  builder$add_variable("y", 0L, "loglogistic", "", "")
   model <- builder$build()
 
   data <- list(y = c(1.2, 2.5, 3.0))
@@ -346,8 +346,8 @@ test_that("LikelihoodDriver evaluates loglogistic survival outcomes via R bindin
 
 test_that("LikelihoodDriver accumulates CIF-style competing risks via R bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("cause_lognormal", 0L, "lognormal")
-  builder$add_variable("cause_loglogistic", 0L, "loglogistic")
+  builder$add_variable("cause_lognormal", 0L, "lognormal", "", "")
+  builder$add_variable("cause_loglogistic", 0L, "loglogistic", "", "")
   model <- builder$build()
 
   times <- c(1.3, 2.0, 3.6)
@@ -410,11 +410,11 @@ test_that("ModelIRBuilder serializes new covariance structures", {
 
   for (case in cases) {
     builder <- new(ModelIRBuilder)
-    builder$add_variable("y", 0L, "gaussian")
-    builder$add_variable("cluster", 2L, "")
+    builder$add_variable("y", 0L, "gaussian", "", "")
+    builder$add_variable("cluster", 2L, "", "", "")
     if (case$dim > 1L) {
       for (idx in seq_len(case$dim)) {
-        builder$add_variable(paste0("z", idx), 1L, "")
+        builder$add_variable(paste0("z", idx), 1L, "", "", "")
       }
     }
     builder$add_edge(1L, "cluster", "y", "beta")
@@ -431,7 +431,7 @@ test_that("ModelIRBuilder serializes new covariance structures", {
 
 test_that("LikelihoodDriver works", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "gaussian")
+  builder$add_variable("y", 0, "gaussian", "", "")
   model <- builder$build()
   
   driver <- new(LikelihoodDriver)
@@ -448,9 +448,9 @@ test_that("LikelihoodDriver works", {
 
 test_that("Laplace gradients are exposed via bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 1, "")
-  builder$add_variable("cluster", 2, "")
+  builder$add_variable("y", 0, "binomial", "", "")
+  builder$add_variable("x", 1, "", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G", "diagonal", 1)
   builder$add_random_effect("u", c("cluster"), "G")
@@ -613,9 +613,9 @@ test_that("Ordinal Laplace gradients match finite differences", {
 
 test_that("Laplace fit converges through bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
+  builder$add_variable("y", 0, "binomial", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G", "diagonal", 1)
   builder$add_random_effect("u", c("cluster"), "G")
@@ -661,10 +661,10 @@ test_that("Laplace fit converges through bindings", {
 
 test_that("Laplace multi-effect fit converges through bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
-  builder$add_variable("batch", 2, "")
+  builder$add_variable("y", 0, "binomial", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
+  builder$add_variable("batch", 2, "", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_cluster", "diagonal", 1)
   builder$add_covariance("G_batch", "diagonal", 1)
@@ -715,10 +715,10 @@ test_that("Laplace multi-effect fit converges through bindings", {
 
 test_that("Laplace mixed covariance fit converges through bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
-  builder$add_variable("batch", 2, "")
+  builder$add_variable("y", 0, "binomial", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
+  builder$add_variable("batch", 2, "", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_cluster", "diagonal", 1)
   builder$add_covariance("G_batch_fixed", "scaled_fixed", 1)
@@ -771,11 +771,11 @@ test_that("Laplace mixed covariance fit converges through bindings", {
 
 test_that("Laplace random-slope fit converges through bindings", {
   builder <- new(ModelIRBuilder)
-  builder$add_variable("y", 0, "binomial")
-  builder$add_variable("x", 0, "gaussian")
-  builder$add_variable("cluster", 2, "")
-  builder$add_variable("intercept_col", 0, "gaussian")
-  builder$add_variable("z", 0, "gaussian")
+  builder$add_variable("y", 0, "binomial", "", "")
+  builder$add_variable("x", 0, "gaussian", "", "")
+  builder$add_variable("cluster", 2, "", "", "")
+  builder$add_variable("intercept_col", 0, "gaussian", "", "")
+  builder$add_variable("z", 0, "gaussian", "", "")
   builder$add_edge(1, "x", "y", "beta")
   builder$add_covariance("G_cluster2", "unstructured", 2)
   builder$add_random_effect("u_cluster2", c("cluster", "intercept_col", "z"), "G_cluster2")
