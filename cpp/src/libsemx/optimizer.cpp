@@ -137,6 +137,18 @@ OptimizationResult LBFGSOptimizer::optimize(const ObjectiveFunction& function,
     LBFGSpp::LBFGSParam<double> param;
     param.epsilon = options.tolerance;
     param.max_iterations = options.max_iterations;
+    param.m = options.m;
+    param.past = options.past;
+    param.delta = options.delta;
+    param.max_linesearch = options.max_linesearch;
+
+    if (options.linesearch_type == "armijo") {
+        param.linesearch = LBFGSpp::LBFGS_LINESEARCH_BACKTRACKING_ARMIJO;
+    } else if (options.linesearch_type == "wolfe") {
+        param.linesearch = LBFGSpp::LBFGS_LINESEARCH_BACKTRACKING_WOLFE;
+    } else {
+        param.linesearch = LBFGSpp::LBFGS_LINESEARCH_BACKTRACKING_STRONG_WOLFE;
+    }
     
     LBFGSpp::LBFGSSolver<double> solver(param);
     LBFGSFunctor functor(function);

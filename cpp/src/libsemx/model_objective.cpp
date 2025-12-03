@@ -601,6 +601,23 @@ std::vector<double> ModelObjective::constrained_derivatives(const std::vector<do
     return catalog_.constrained_derivatives(unconstrained);
 }
 
+std::unordered_map<std::string, std::vector<double>> ModelObjective::get_covariance_matrices(const std::vector<double>& constrained_parameters) const {
+    std::unordered_map<std::string, std::vector<double>> matrices;
+    for (const auto& cov : model_.covariances) {
+        auto structure = create_covariance_structure(cov, fixed_covariance_data_);
+        auto it = covariance_param_ranges_.find(cov.id);
+        if (it != covariance_param_ranges_.end()) {
+            std::vector<double> params;
+            params.reserve(it->second.second);
+            for (size_t i = 0; i < it->second.second; ++i) {
+                params.push_back(constrained_parameters[it->second.first + i]);
+            }
+            matrices[cov.id] = structure->materialize(params);
+        }
+    }
+    return matrices;
+}
+
 void ModelObjective::build_prediction_workspaces(const std::vector<double>& constrained_parameters,
                                                  std::unordered_map<std::string, std::vector<double>>& linear_predictors,
                                                  std::unordered_map<std::string, std::vector<double>>& dispersions,

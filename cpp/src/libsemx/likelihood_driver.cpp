@@ -1732,6 +1732,8 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
     FitResult fit_result;
     fit_result.optimization_result = result;
     fit_result.optimization_result.parameters = objective.to_constrained(result.parameters);
+    fit_result.parameter_names = objective.parameter_names();
+    fit_result.covariance_matrices = objective.get_covariance_matrices(fit_result.optimization_result.parameters);
 
     if (result.converged) {
         try {
@@ -1777,6 +1779,7 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
                 size_t n_vars = model.variables.size();
                 for(size_t i=0; i<n_vars; ++i) {
                     if (model.variables[i].kind == VariableKind::Observed) {
+                        if (model.variables[i].name == "_intercept") continue;
                         obs_indices.push_back(i);
                         obs_names.push_back(model.variables[i].name);
                     }

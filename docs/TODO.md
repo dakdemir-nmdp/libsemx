@@ -20,15 +20,21 @@
     - [x] Enhanced Python `SemFit.plot()` with `ax` support and Q-Q plots.
     - [x] Improved R `summary.semx_fit` to return list with fit indices and parameter table.
     - [x] Updated R `plot.semx_fit` to accept additional arguments.
-- [ ] Add identifiability checks/constraints for composed covariances (Kronecker scaling, Hadamard or weighted sums with weights summing to 1) with verbose corrections surfaced in summaries.
-- [ ] Align front-end APIs with the richer DSL/plotting guidelines and design identifiability checks plus summary reporting plan.
+- [x] Add identifiability checks/constraints for composed covariances (Kronecker scaling, Hadamard or weighted sums with weights summing to 1). (2025-12-02)
+    - [x] Implemented analytic gradients for `KroneckerCovariance` with `learn_scale=true`.
+    - [x] Added `simplex_weights` mode to `MultiKernelCovariance` with softmax transform and gradients.
+- [x] Align front-end APIs with the richer DSL/plotting guidelines and design identifiability checks plus summary reporting plan. (2025-02-24)
+    - [x] Updated `Model` (Python) to support `multi_kernel_simplex` and list of marker matrices.
+    - [x] Updated `SemFitSummary` (Python) to display covariance weights and use parameter names from C++.
+    - [x] Fixed C++ `build_covariance_positive_mask` for `multi_kernel_simplex`.
+    - [x] Exposed `parameter_names` in `FitResult` via bindings.
 - [ ] Extend optimizers and fit indices.
     - [x] Implement CFI, TLI, RMSEA, and SRMR fit indices in C++ and expose to bindings. (2025-02-24)
-    - [ ] Add variance component extraction methods.
-    - [ ] Explore/expose additional optimizer settings (e.g., line search parameters).
-- [ ] Enrich ModelIR to carry extra schema.
-    - [ ] Extend `ModelIR` to store variable labels, measurement levels, and other metadata.
-    - [ ] Ensure this metadata is preserved through the bindings and available in `summary()`.
+    - [x] Add variance component extraction methods. (2025-02-24)
+    - [x] Explore/expose additional optimizer settings (e.g., line search parameters). (2025-02-24)
+- [x] Enrich ModelIR to carry extra schema. (2025-02-24)
+    - [x] Extend `ModelIR` to store variable labels, measurement levels, and other metadata.
+    - [x] Ensure this metadata is preserved through the bindings and available in `summary()`.
 
 ## Completed
 - [x] Add higher-level GS/trait×env builders. (2025-02-24)

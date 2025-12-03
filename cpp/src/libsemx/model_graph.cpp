@@ -22,7 +22,7 @@ namespace {
 constexpr double kDefaultCoefficientInit = 0.0;
 }  // namespace
 
-void ModelGraph::add_variable(std::string name, VariableKind kind, std::string family) {
+void ModelGraph::add_variable(std::string name, VariableKind kind, std::string family, std::string label, std::string measurement_level) {
     if (name.empty()) {
         throw std::invalid_argument("variable name must be non-empty");
     }
@@ -38,7 +38,7 @@ void ModelGraph::add_variable(std::string name, VariableKind kind, std::string f
     }
 
     variable_index_.emplace(name, kind);
-    variables_.push_back(VariableSpec{std::move(name), kind, std::move(family)});
+    variables_.push_back(VariableSpec{std::move(name), kind, std::move(family), std::move(label), std::move(measurement_level)});
 }
 
 void ModelGraph::add_edge(EdgeKind kind, std::string source, std::string target, std::string parameter_id) {

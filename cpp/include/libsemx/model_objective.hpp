@@ -32,6 +32,8 @@ public:
 
     [[nodiscard]] std::vector<double> constrained_derivatives(const std::vector<double>& unconstrained) const;
 
+    [[nodiscard]] std::unordered_map<std::string, std::vector<double>> get_covariance_matrices(const std::vector<double>& constrained_parameters) const;
+
     // Helper to expose workspaces for diagnostics
     void build_prediction_workspaces(const std::vector<double>& constrained_parameters,
                                      std::unordered_map<std::string, std::vector<double>>& linear_predictors,

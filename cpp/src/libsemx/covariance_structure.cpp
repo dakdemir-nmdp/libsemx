@@ -563,6 +563,12 @@ std::unique_ptr<CovarianceStructure> create_covariance_structure(
             throw std::runtime_error("Missing fixed covariance data for: " + spec.id);
         }
         return std::make_unique<MultiKernelCovariance>(fixed_it->second, spec.dimension);
+    } else if (normalized == "multi_kernel_simplex") {
+        auto fixed_it = fixed_covariance_data.find(spec.id);
+        if (fixed_it == fixed_covariance_data.end()) {
+            throw std::runtime_error("Missing fixed covariance data for: " + spec.id);
+        }
+        return std::make_unique<MultiKernelCovariance>(fixed_it->second, spec.dimension, true);
     } else if (normalized == "compound_symmetry" || normalized == "cs") {
         return std::make_unique<CompoundSymmetryCovariance>(spec.dimension);
     } else if (normalized == "ar1") {
@@ -619,6 +625,14 @@ std::vector<bool> build_covariance_positive_mask(const CovarianceSpec& spec,
 
     if (normalized == "multi_kernel") {
         std::fill(mask.begin(), mask.end(), true);
+        return mask;
+    }
+
+    if (normalized == "multi_kernel_simplex") {
+        if (!mask.empty()) {
+            mask[0] = true; // sigma_sq is positive
+            // Remaining parameters (weights) are free (softmax inputs)
+        }
         return mask;
     }
 

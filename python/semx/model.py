@@ -37,6 +37,8 @@ class _VariableDef:
     name: str
     kind: VariableKind
     family: str
+    label: str = ""
+    measurement_level: str = ""
 
 
 @dataclass
@@ -75,7 +77,10 @@ class SemFit:
     def parameter_estimates(self) -> Dict[str, float]:
         """Map parameter IDs to their estimated values."""
         params = self.fit_result.optimization_result.parameters
-        names = [p.id for p in self.model_ir.parameters]
+        if hasattr(self.fit_result, "parameter_names") and self.fit_result.parameter_names:
+            names = self.fit_result.parameter_names
+        else:
+            names = [p.id for p in self.model_ir.parameters]
         return dict(zip(names, params))
 
     @property
@@ -95,16 +100,72 @@ class SemFit:
 
     def standardized_solution(self) -> Any:
         """Compute standardized parameter estimates (std.lv and std.all)."""
-        names = [p.id for p in self.model_ir.parameters]
+        if hasattr(self.fit_result, "parameter_names") and self.fit_result.parameter_names:
+            names = self.fit_result.parameter_names
+        else:
+            names = [p.id for p in self.model_ir.parameters]
         values = self.fit_result.optimization_result.parameters
         return compute_standardized_estimates(self.model_ir, names, values)
+
+    def get_covariance_weights(self, cov_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve weights for a multi-kernel covariance structure.
+        
+        Returns
+        -------
+        dict or None
+            Dictionary with 'sigma_sq' and 'weights' (list of floats), or None
+            if the covariance structure is not multi_kernel_simplex.
+        """
+        # Find the covariance spec
+        cov_spec = next((c for c in self.model_ir.covariances if c.id == cov_id), None)
+        if not cov_spec:
+            raise ValueError(f"Covariance '{cov_id}' not found in model")
+
+        if cov_spec.structure != "multi_kernel_simplex":
+             return None
+
+        # Get parameters
+        params = self.parameter_estimates
+        
+        # The parameters are named cov_id_0, cov_id_1, ...
+        # cov_id_0 is sigma_sq.
+        # cov_id_1...k are thetas (softmax inputs).
+        
+        prefix = f"{cov_id}_"
+        relevant_params = {k: v for k, v in params.items() if k.startswith(prefix)}
+        
+        if not relevant_params:
+            return None
+            
+        # Sort by index
+        sorted_keys = sorted(relevant_params.keys(), key=lambda x: int(x.split("_")[-1]))
+        
+        if len(sorted_keys) < 2:
+            return None
+            
+        sigma_sq = relevant_params[sorted_keys[0]]
+        thetas = [relevant_params[k] for k in sorted_keys[1:]]
+        
+        # Softmax
+        max_theta = max(thetas)
+        exps = [np.exp(t - max_theta) for t in thetas]
+        sum_exps = sum(exps)
+        weights = [e / sum_exps for e in exps]
+        
+        return {
+            "sigma_sq": sigma_sq,
+            "weights": weights
+        }
 
     def diagnostics(self) -> Any:
         """Compute model diagnostics (residuals, SRMR)."""
         if not self.sample_stats:
             raise ValueError("Sample statistics not available for diagnostics")
 
-        names = [p.id for p in self.model_ir.parameters]
+        if hasattr(self.fit_result, "parameter_names") and self.fit_result.parameter_names:
+            names = self.fit_result.parameter_names
+        else:
+            names = [p.id for p in self.model_ir.parameters]
         values = self.fit_result.optimization_result.parameters
 
         return compute_model_diagnostics(
@@ -120,7 +181,10 @@ class SemFit:
         if not self.sample_stats:
             raise ValueError("Sample statistics not available for modification indices")
 
-        names = [p.id for p in self.model_ir.parameters]
+        if hasattr(self.fit_result, "parameter_names") and self.fit_result.parameter_names:
+            names = self.fit_result.parameter_names
+        else:
+            names = [p.id for p in self.model_ir.parameters]
         values = self.fit_result.optimization_result.parameters
 
         return compute_modification_indices(
@@ -130,6 +194,76 @@ class SemFit:
             self.sample_stats["covariance"],
             self.sample_stats["n_obs"],
         )
+
+    def variance_components(self) -> pd.DataFrame:
+        """Extract variance components (random effects)."""
+        rows = []
+        
+        if hasattr(self.fit_result, "covariance_matrices"):
+            cov_matrices = self.fit_result.covariance_matrices
+            
+            # Map covariance_id to random effect info
+            re_map = {}
+            for re in self.model_ir.random_effects:
+                re_map[re.covariance_id] = re
+                
+            for cov_id, matrix in cov_matrices.items():
+                if cov_id not in re_map:
+                    continue
+                
+                re = re_map[cov_id]
+                if not re.variables:
+                    continue
+                    
+                group = re.variables[0]
+                design_vars = re.variables[1:]
+                
+                # Handle implicit intercept for (1 | group)
+                if not design_vars and len(matrix) == 1:
+                    design_vars = ["(Intercept)"]
+                
+                # Matrix is flattened
+                dim = len(design_vars)
+                dim = len(design_vars)
+                if len(matrix) != dim * dim:
+                    # Mismatch, skip or warn
+                    continue
+                    
+                mat = np.array(matrix).reshape(dim, dim)
+                
+                # Extract variances and correlations
+                sds = np.sqrt(np.diag(mat))
+                
+                # Avoid division by zero
+                sds_safe = sds.copy()
+                sds_safe[sds_safe == 0] = 1.0
+                corrs = mat / np.outer(sds_safe, sds_safe)
+                
+                for i, var1 in enumerate(design_vars):
+                    rows.append({
+                        "Group": group,
+                        "Name1": var1,
+                        "Name2": "",
+                        "Variance": mat[i, i],
+                        "Std.Dev": sds[i],
+                        "Corr": np.nan
+                    })
+                    
+                    for j in range(i + 1, dim):
+                        var2 = design_vars[j]
+                        rows.append({
+                            "Group": group,
+                            "Name1": var1,
+                            "Name2": var2,
+                            "Variance": mat[i, j],
+                            "Std.Dev": np.nan,
+                            "Corr": corrs[i, j]
+                        })
+        
+        if not rows:
+            return pd.DataFrame(columns=["Group", "Name1", "Name2", "Variance", "Std.Dev", "Corr"])
+            
+        return pd.DataFrame(rows)
 
     def summary(self) -> SemFitSummary:
         """Return a summary object containing fit statistics and parameter estimates."""
@@ -262,7 +396,10 @@ class SemFitSummary:
             2 * (1 - norm.cdf(abs(z))) if not np.isnan(z) else np.nan for z in z_values
         ]
 
-        param_ids = [p.id for p in self.fit.model_ir.parameters]
+        if hasattr(self.fit.fit_result, "parameter_names") and self.fit.fit_result.parameter_names:
+            param_ids = self.fit.fit_result.parameter_names
+        else:
+            param_ids = [p.id for p in self.fit.model_ir.parameters]
 
         data = {
             "Estimate": params,
@@ -304,6 +441,37 @@ class SemFitSummary:
         lines.append("")
         lines.append(self.parameters.to_string())
         
+        # Add variance components if any
+        vc = self.fit.variance_components()
+        if not vc.empty:
+            lines.append("")
+            lines.append("Variance Components:")
+            lines.append(vc.to_string(index=False))
+        
+        # Add covariance weights if any
+        for cov in self.fit.model_ir.covariances:
+            if cov.structure == "multi_kernel_simplex":
+                weights_info = self.fit.get_covariance_weights(cov.id)
+                if weights_info:
+                    lines.append("")
+                    lines.append(f"Covariance Weights for '{cov.id}':")
+                    lines.append(f"  Sigma^2: {weights_info['sigma_sq']:.4f}")
+                    lines.append("  Weights:")
+                    for i, w in enumerate(weights_info['weights']):
+                        lines.append(f"    Kernel {i+1}: {w:.4f}")
+
+        # Add variable metadata if any
+        vars_with_meta = [v for v in self.fit.model_ir.variables if v.label or v.measurement_level]
+        if vars_with_meta:
+            lines.append("")
+            lines.append("Variable Metadata:")
+            meta_data = {
+                "Variable": [v.name for v in vars_with_meta],
+                "Label": [v.label for v in vars_with_meta],
+                "Level": [v.measurement_level for v in vars_with_meta]
+            }
+            lines.append(pd.DataFrame(meta_data).to_string(index=False))
+        
         return "\n".join(lines)
 
 
@@ -333,6 +501,8 @@ class Model:
         covariances: Optional[Sequence[Mapping[str, Any]]] = None,
         genomic: Optional[Mapping[str, Any]] = None,
         random_effects: Optional[Sequence[Mapping[str, Any]]] = None,
+        labels: Optional[Mapping[str, str]] = None,
+        measurement_levels: Optional[Mapping[str, str]] = None,
     ) -> None:
         cleaned = [eq.strip() for eq in equations if eq and eq.strip()]
         if not cleaned:
@@ -345,6 +515,8 @@ class Model:
         self._explicit_kinds = {
             name: self._normalize_kind(value) for name, value in (kinds or {}).items()
         }
+        self._labels = labels or {}
+        self._measurement_levels = measurement_levels or {}
         self._covariances = list(covariances or [])
         self._genomic_specs = self._normalize_genomic_specs(genomic or {})
         existing_cov_ids = {cov["name"] for cov in self._covariances}
@@ -352,17 +524,21 @@ class Model:
             if cov_id in existing_cov_ids:
                 existing = next(cov for cov in self._covariances if cov["name"] == cov_id)
                 # Only check dimension if not a genomic/GRM structure (where dim=q, markers=N)
-                if spec["structure"] not in ("grm", "genomic") and existing["dimension"] != spec["markers"].shape[0]:
+                # Use first marker matrix for dimension check
+                first_markers = spec["markers"][0]
+                if spec["structure"] not in ("grm", "genomic") and existing["dimension"] != first_markers.shape[0]:
                     raise ModelSpecificationError(
                         f"Genomic covariance '{cov_id}' dimension mismatch: "
-                        f"{existing['dimension']} vs markers with {spec['markers'].shape[0]} rows"
+                        f"{existing['dimension']} vs markers with {first_markers.shape[0]} rows"
                     )
                 continue
+            # Use first marker matrix for dimension
+            first_markers = spec["markers"][0]
             self._covariances.append(
                 {
                     "name": cov_id,
                     "structure": spec["structure"],
-                    "dimension": spec["markers"].shape[0],
+                    "dimension": first_markers.shape[0],
                 }
             )
         self._random_effects = list(random_effects or [])
@@ -382,7 +558,7 @@ class Model:
         if self._ir is None:
             builder = ModelIRBuilder()
             for var in self._variables.values():
-                builder.add_variable(var.name, var.kind, var.family)
+                builder.add_variable(var.name, var.kind, var.family, var.label, var.measurement_level)
             for edge in self._edges:
                 builder.add_edge(edge.kind, edge.source, edge.target, edge.parameter_id)
             for cov in self._covariances:
@@ -401,29 +577,46 @@ class Model:
         if self._fixed_covariance_cache is None:
             cache: Dict[str, List[List[float]]] = {}
             for cov_id, spec in self._genomic_specs.items():
-                markers = spec["markers"]
-                if spec["precomputed"]:
-                    kernel = markers.flatten(order="C").tolist()
-                else:
-                    kernel = GenomicRelationshipMatrix.vanraden(
-                        markers.flatten(order="C").tolist(),
-                        int(markers.shape[0]),
-                        int(markers.shape[1]),
-                        spec["center"],
-                        spec["normalize"],
-                    )
-                cache[cov_id] = [kernel]
+                kernels = []
+                for markers in spec["markers"]:
+                    if spec["precomputed"]:
+                        kernel = markers.flatten(order="C").tolist()
+                    else:
+                        kernel = GenomicRelationshipMatrix.vanraden(
+                            markers.flatten(order="C").tolist(),
+                            int(markers.shape[0]),
+                            int(markers.shape[1]),
+                            spec["center"],
+                            spec["normalize"],
+                        )
+                    kernels.append(kernel)
+                cache[cov_id] = kernels
             self._fixed_covariance_cache = cache
         return dict(self._fixed_covariance_cache)
 
     def fit(
         self,
-        data: Union[Mapping[str, Sequence[float]], pd.DataFrame],
+        data: Any,
         options: Optional[Any] = None,
         optimizer_name: str = "lbfgs",
         fixed_covariance_data: Optional[Mapping[str, Sequence[Sequence[float]]]] = None,
+        **kwargs
     ) -> SemFit:
         """Fit the model to data.
+
+        Parameters
+        ----------
+        data : Any
+            Pandas DataFrame or dictionary of lists.
+        options : OptimizationOptions, optional
+            Custom optimization options.
+        optimizer_name : str, optional
+            Name of the optimizer to use (default: "lbfgs").
+        fixed_covariance_data : dict, optional
+            Fixed covariance matrices.
+        **kwargs
+            Additional optimization options passed to OptimizationOptions if options is None.
+            Supported: max_iterations, tolerance, learning_rate, m, past, delta, max_linesearch, linesearch_type.
 
         Returns
         -------
@@ -435,6 +628,22 @@ class Model:
 
         if options is None:
             options = OptimizationOptions()
+            if "max_iterations" in kwargs:
+                options.max_iterations = kwargs["max_iterations"]
+            if "tolerance" in kwargs:
+                options.tolerance = kwargs["tolerance"]
+            if "learning_rate" in kwargs:
+                options.learning_rate = kwargs["learning_rate"]
+            if "m" in kwargs:
+                options.m = kwargs["m"]
+            if "past" in kwargs:
+                options.past = kwargs["past"]
+            if "delta" in kwargs:
+                options.delta = kwargs["delta"]
+            if "max_linesearch" in kwargs:
+                options.max_linesearch = kwargs["max_linesearch"]
+            if "linesearch_type" in kwargs:
+                options.linesearch_type = kwargs["linesearch_type"]
 
         # Convert data to dict of lists for C++ if it's a DataFrame
         if hasattr(data, "to_dict"):
@@ -617,8 +826,14 @@ class Model:
                 self._add_random_effect(mixed)
                 continue
 
-            if predictor in {"1", "0"}:
-                continue  # constant handled outside the structural graph
+            if predictor == "1":
+                predictor = "_intercept"
+                self._uses_intercept_column = True
+                if "_intercept" not in self._families:
+                    self._families["_intercept"] = "gaussian"
+            elif predictor == "0":
+                continue
+            
             source_var = self._ensure_variable(predictor, VariableKind.Observed)
             self._edges.append(
                 _EdgeDef(
@@ -674,7 +889,13 @@ class Model:
             raise ModelSpecificationError(
                 f"Observed variable '{normalized}' requires an outcome family"
             )
-        var_def = _VariableDef(normalized, kind, family)
+        var_def = _VariableDef(
+            normalized, 
+            kind, 
+            family, 
+            self._labels.get(normalized, ""), 
+            self._measurement_levels.get(normalized, "")
+        )
         self._variables[normalized] = var_def
         return var_def
 
@@ -688,6 +909,10 @@ class Model:
             grouping = variables[0]
             self._ensure_variable(grouping, VariableKind.Grouping, enforce_kind=True, respect_explicit=True)
             for var in variables[1:]:
+                if var == "_intercept":
+                    self._uses_intercept_column = True
+                    if "_intercept" not in self._families:
+                        self._families["_intercept"] = "gaussian"
                 # Design variables default to observed; require a family mapping upstream.
                 self._ensure_variable(var, VariableKind.Observed)
 
@@ -703,19 +928,55 @@ class Model:
     def _normalize_genomic_specs(genomic: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
         specs: Dict[str, Dict[str, Any]] = {}
         for cov_id, payload in genomic.items():
-            if "markers" not in payload:
+            raw_markers = payload.get("markers")
+            if raw_markers is None:
                 raise ModelSpecificationError(f"Genomic covariance '{cov_id}' requires a 'markers' matrix")
-            markers = np.asarray(payload["markers"], dtype=float)
-            if markers.ndim != 2 or markers.size == 0:
-                raise ModelSpecificationError(f"Genomic covariance '{cov_id}' markers must be a non-empty 2D array")
+            
             structure = payload.get("structure", "grm")
+            is_multi = "multi_kernel" in structure
+            
+            marker_list = []
+            if is_multi:
+                if not isinstance(raw_markers, list):
+                     # It might be a single array, but user wants multi_kernel (maybe just 1 kernel)
+                     # But usually multi_kernel implies list.
+                     # If it's a numpy array, it's a single matrix.
+                     if hasattr(raw_markers, "ndim") and raw_markers.ndim == 2:
+                         marker_list = [np.asarray(raw_markers, dtype=float)]
+                     else:
+                         raise ModelSpecificationError(f"Multi-kernel covariance '{cov_id}' requires a list of marker matrices")
+                else:
+                     marker_list = [np.asarray(m, dtype=float) for m in raw_markers]
+            else:
+                # Single matrix expected
+                if isinstance(raw_markers, list) and len(raw_markers) > 0 and hasattr(raw_markers[0], "ndim"):
+                     # User passed list of matrices but structure is not multi_kernel?
+                     # Assume first one or error?
+                     # Let's assume single matrix.
+                     marker_list = [np.asarray(raw_markers, dtype=float)]
+                else:
+                     marker_list = [np.asarray(raw_markers, dtype=float)]
+
+            # Validate dimensions
+            if not marker_list:
+                 raise ModelSpecificationError(f"Genomic covariance '{cov_id}' has no markers")
+                 
+            dim = marker_list[0].shape[0]
+            for m in marker_list:
+                if m.ndim != 2:
+                    raise ModelSpecificationError(f"Genomic covariance '{cov_id}' markers must be a non-empty 2D array")
+                if m.shape[0] != dim:
+                     raise ModelSpecificationError(f"Genomic covariance '{cov_id}' markers dimension mismatch")
+
             precomputed = bool(payload.get("precomputed", False))
-            if precomputed and markers.shape[0] != markers.shape[1]:
-                raise ModelSpecificationError(
-                    f"Genomic covariance '{cov_id}' precomputed kernel must be square"
-                )
+            if precomputed:
+                for m in marker_list:
+                    if m.shape[0] != m.shape[1]:
+                        raise ModelSpecificationError(
+                            f"Genomic covariance '{cov_id}' precomputed kernel must be square"
+                        )
             specs[cov_id] = {
-                "markers": markers,
+                "markers": marker_list,
                 "structure": structure,
                 "center": bool(payload.get("center", True)),
                 "normalize": bool(payload.get("normalize", True)),

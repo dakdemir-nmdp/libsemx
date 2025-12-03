@@ -12,7 +12,7 @@ class ModelIRBuilder {
 public:
     ModelIRBuilder() = default;
 
-    void add_variable(std::string name, VariableKind kind, std::string family = {});
+    void add_variable(std::string name, VariableKind kind, std::string family = {}, std::string label = {}, std::string measurement_level = {});
 
     void add_edge(EdgeKind kind, std::string source, std::string target, std::string parameter_id);
 

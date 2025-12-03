@@ -11,6 +11,13 @@ struct OptimizationOptions {
     std::size_t max_iterations{100};
     double tolerance{1e-6};
     double learning_rate{0.1};
+    
+    // L-BFGS specific options
+    int m{6}; // History size
+    int past{0}; // Distance for delta-based convergence
+    double delta{0.0}; // Delta for convergence test
+    int max_linesearch{20}; // Max line search trials
+    std::string linesearch_type{"strong_wolfe"}; // "armijo", "wolfe", "strong_wolfe"
 };
 
 struct OptimizationResult {

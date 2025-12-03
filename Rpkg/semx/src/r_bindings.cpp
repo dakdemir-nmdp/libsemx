@@ -114,7 +114,9 @@ Rcpp::List ModelIR_variables(ModelIR* model) {
         list.push_back(Rcpp::List::create(
             Rcpp::Named("name") = var.name,
             Rcpp::Named("kind") = static_cast<int>(var.kind),
-            Rcpp::Named("family") = var.family
+            Rcpp::Named("family") = var.family,
+            Rcpp::Named("label") = var.label,
+            Rcpp::Named("measurement_level") = var.measurement_level
         ));
     }
     return list;
@@ -189,8 +191,8 @@ std::vector<double> grm_kronecker_cpp(const Rcpp::NumericMatrix& left,
 } // namespace
 
 // Wrapper for ModelIRBuilder::add_variable to handle enum
-void ModelIRBuilder_add_variable(ModelIRBuilder* builder, std::string name, int kind, std::string family) {
-    builder->add_variable(name, static_cast<VariableKind>(kind), family);
+void ModelIRBuilder_add_variable(ModelIRBuilder* builder, std::string name, int kind, std::string family, std::string label, std::string measurement_level) {
+    builder->add_variable(name, static_cast<VariableKind>(kind), family, label, measurement_level);
 }
 
 // Wrapper for ModelIRBuilder::add_edge
@@ -480,6 +482,11 @@ RCPP_MODULE(semx) {
         .field("max_iterations", &OptimizationOptions::max_iterations)
         .field("tolerance", &OptimizationOptions::tolerance)
         .field("learning_rate", &OptimizationOptions::learning_rate)
+        .field("m", &OptimizationOptions::m)
+        .field("past", &OptimizationOptions::past)
+        .field("delta", &OptimizationOptions::delta)
+        .field("max_linesearch", &OptimizationOptions::max_linesearch)
+        .field("linesearch_type", &OptimizationOptions::linesearch_type)
     ;
 
     class_<OptimizationResult>("OptimizationResult")
@@ -494,8 +501,17 @@ RCPP_MODULE(semx) {
         .field("optimization_result", &FitResult::optimization_result)
         .field("standard_errors", &FitResult::standard_errors)
         .field("vcov", &FitResult::vcov)
+        .field("parameter_names", &FitResult::parameter_names)
         .field("aic", &FitResult::aic)
         .field("bic", &FitResult::bic)
+        .field("chi_square", &FitResult::chi_square)
+        .field("df", &FitResult::df)
+        .field("p_value", &FitResult::p_value)
+        .field("cfi", &FitResult::cfi)
+        .field("tli", &FitResult::tli)
+        .field("rmsea", &FitResult::rmsea)
+        .field("srmr", &FitResult::srmr)
+        .field("covariance_matrices", &FitResult::covariance_matrices)
     ;
 
     class_<LikelihoodDriver>("LikelihoodDriver")

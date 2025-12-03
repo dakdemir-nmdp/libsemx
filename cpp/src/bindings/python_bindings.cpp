@@ -42,7 +42,12 @@ PYBIND11_MODULE(_libsemx, m) {
         .def(py::init<>())
         .def_readwrite("max_iterations", &OptimizationOptions::max_iterations)
         .def_readwrite("tolerance", &OptimizationOptions::tolerance)
-        .def_readwrite("learning_rate", &OptimizationOptions::learning_rate);
+        .def_readwrite("learning_rate", &OptimizationOptions::learning_rate)
+        .def_readwrite("m", &OptimizationOptions::m)
+        .def_readwrite("past", &OptimizationOptions::past)
+        .def_readwrite("delta", &OptimizationOptions::delta)
+        .def_readwrite("max_linesearch", &OptimizationOptions::max_linesearch)
+        .def_readwrite("linesearch_type", &OptimizationOptions::linesearch_type);
 
     py::class_<OptimizationResult>(m, "OptimizationResult")
         .def(py::init<>())
@@ -57,6 +62,7 @@ PYBIND11_MODULE(_libsemx, m) {
         .def_readwrite("optimization_result", &FitResult::optimization_result)
         .def_readwrite("standard_errors", &FitResult::standard_errors)
         .def_readwrite("vcov", &FitResult::vcov)
+        .def_readwrite("parameter_names", &FitResult::parameter_names)
         .def_readwrite("aic", &FitResult::aic)
         .def_readwrite("bic", &FitResult::bic)
         .def_readwrite("chi_square", &FitResult::chi_square)
@@ -65,7 +71,8 @@ PYBIND11_MODULE(_libsemx, m) {
         .def_readwrite("cfi", &FitResult::cfi)
         .def_readwrite("tli", &FitResult::tli)
         .def_readwrite("rmsea", &FitResult::rmsea)
-        .def_readwrite("srmr", &FitResult::srmr);
+        .def_readwrite("srmr", &FitResult::srmr)
+        .def_readwrite("covariance_matrices", &FitResult::covariance_matrices);
 
     // Post-estimation structs
     py::class_<StandardizedEdgeResult>(m, "StandardizedEdgeResult")
@@ -108,11 +115,13 @@ PYBIND11_MODULE(_libsemx, m) {
 
     py::class_<VariableSpec>(m, "VariableSpec")
         .def(py::init<>())
-        .def(py::init<std::string, VariableKind, std::string>(), 
-             py::arg("name"), py::arg("kind"), py::arg("family") = "")
+        .def(py::init<std::string, VariableKind, std::string, std::string, std::string>(), 
+             py::arg("name"), py::arg("kind"), py::arg("family") = "", py::arg("label") = "", py::arg("measurement_level") = "")
         .def_readwrite("name", &VariableSpec::name)
         .def_readwrite("kind", &VariableSpec::kind)
-        .def_readwrite("family", &VariableSpec::family);
+        .def_readwrite("family", &VariableSpec::family)
+        .def_readwrite("label", &VariableSpec::label)
+        .def_readwrite("measurement_level", &VariableSpec::measurement_level);
 
     py::class_<EdgeSpec>(m, "EdgeSpec")
         .def(py::init<>())
@@ -152,7 +161,7 @@ PYBIND11_MODULE(_libsemx, m) {
     py::class_<ModelIRBuilder>(m, "ModelIRBuilder")
         .def(py::init<>())
         .def("add_variable", &ModelIRBuilder::add_variable,
-             py::arg("name"), py::arg("kind"), py::arg("family") = std::string())
+             py::arg("name"), py::arg("kind"), py::arg("family") = std::string(), py::arg("label") = std::string(), py::arg("measurement_level") = std::string())
         .def("add_edge", &ModelIRBuilder::add_edge)
         .def("add_covariance", &ModelIRBuilder::add_covariance)
         .def("add_random_effect", &ModelIRBuilder::add_random_effect)

@@ -19,6 +19,8 @@ struct FitResult {
     OptimizationResult optimization_result;
     std::vector<double> standard_errors;
     std::vector<double> vcov; // Flattened n x n matrix
+    std::vector<std::string> parameter_names;
+    std::unordered_map<std::string, std::vector<double>> covariance_matrices;
     double aic{0.0};
     double bic{0.0};
     double chi_square{std::numeric_limits<double>::quiet_NaN()};

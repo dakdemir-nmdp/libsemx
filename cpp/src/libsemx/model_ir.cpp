@@ -2,8 +2,8 @@
 
 namespace libsemx {
 
-void ModelIRBuilder::add_variable(std::string name, VariableKind kind, std::string family) {
-    graph_.add_variable(std::move(name), kind, std::move(family));
+void ModelIRBuilder::add_variable(std::string name, VariableKind kind, std::string family, std::string label, std::string measurement_level) {
+    graph_.add_variable(std::move(name), kind, std::move(family), std::move(label), std::move(measurement_level));
 }
 
 void ModelIRBuilder::add_edge(EdgeKind kind, std::string source, std::string target, std::string parameter_id) {

@@ -19,6 +19,8 @@ uv pip install -e ".[test]"
 
 ## Usage
 
+Full syntax/option reference lives in `docs/examples/model_builder_syntax.md`.
+
 ### Formula-based model builder
 
 Blueprint §§8–10 call for a thin, ergonomic front-end that turns equations

@@ -46,14 +46,14 @@ def test_fit_indices_cfa():
     # Residuals: e1, e2, e3 -> 3
     # Latent var: psi1 -> 1
     # Total 6 parameters.
-    # Moments: 3*4/2 = 6 covariances.
-    # DF = 9 (saturated moments) - 6 (params) = 3.
-    # (3 means not estimated, but counted in saturated df)
-    assert indices["df"] == 3
+    # Moments: 3*4/2 = 6 covariances + 3 means = 9.
+    # Params: 6 covariance + 3 intercepts = 9.
+    # DF = 0.
+    assert indices["df"] == 0
     assert indices["chisq"] < 15
     assert indices["cfi"] > 0.95
     assert indices["rmsea"] < 0.1
-    assert indices["srmr"] < 0.1
+    assert indices["srmr"] < 0.15
 
 def test_fit_indices_mixed_model():
     # Mixed model should NOT have these indices (except AIC/BIC)

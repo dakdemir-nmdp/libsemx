@@ -27,6 +27,8 @@ struct VariableSpec {
     std::string name;
     VariableKind kind;
     std::string family;  // outcome family identifier, empty for latent/grouping
+    std::string label;
+    std::string measurement_level;
 };
 
 struct EdgeSpec {

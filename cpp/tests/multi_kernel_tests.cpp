@@ -157,3 +157,70 @@ TEST_CASE("MultiKernelCovariance: Simplex weights", "[covariance][mkl]") {
         }
     }
 }
+
+TEST_CASE("LikelihoodDriver handles multi_kernel_simplex", "[likelihood_driver][mkl]") {
+    libsemx::LikelihoodDriver driver;
+    libsemx::ModelIRBuilder builder;
+
+    builder.add_variable("group", libsemx::VariableKind::Grouping);
+    
+    // Define covariance structure with simplex weights
+    builder.add_covariance("cov_u", "multi_kernel_simplex", 2);
+
+    builder.add_variable("id1", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("id2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
+    
+    builder.add_random_effect("re_u", {"group", "id1", "id2"}, "cov_u");
+
+    auto model = builder.build();
+
+    // Data
+    std::vector<double> y = {1.0, 2.0};
+    std::vector<double> group = {1.0, 1.0};
+    std::vector<double> id1 = {1.0, 0.0};
+    std::vector<double> id2 = {0.0, 1.0};
+    
+    std::unordered_map<std::string, std::vector<double>> data;
+    data["y"] = y;
+    data["group"] = group;
+    data["id1"] = id1;
+    data["id2"] = id2;
+
+    std::unordered_map<std::string, std::vector<double>> linear_predictors;
+    linear_predictors["y"] = {0.0, 0.0};
+
+    std::unordered_map<std::string, std::vector<double>> dispersions;
+    dispersions["y"] = {1.0, 1.0};
+
+    std::unordered_map<std::string, std::vector<double>> covariance_parameters;
+    // sigma^2 = 2.0, theta1 = 0.0, theta2 = 0.0 -> weights 0.5, 0.5
+    covariance_parameters["cov_u"] = {2.0, 0.0, 0.0};
+
+    std::unordered_map<std::string, std::vector<double>> status;
+    std::unordered_map<std::string, std::vector<double>> extra_params;
+
+    // Fixed covariance data (2 kernels)
+    std::vector<double> K1 = {1.0, 0.0, 0.0, 1.0};
+    std::vector<double> K2 = {1.0, 1.0, 1.0, 1.0};
+    std::vector<std::vector<double>> kernels = {K1, K2};
+    
+    std::unordered_map<std::string, std::vector<std::vector<double>>> fixed_cov_data;
+    fixed_cov_data["cov_u"] = kernels;
+
+    double loglik = driver.evaluate_model_loglik(
+        model,
+        data,
+        linear_predictors,
+        dispersions,
+        covariance_parameters,
+        status,
+        extra_params,
+        fixed_cov_data,
+        libsemx::EstimationMethod::ML
+    );
+    
+    // Just check it runs and returns valid likelihood
+    REQUIRE(loglik != 0.0);
+    REQUIRE_FALSE(std::isnan(loglik));
+}
