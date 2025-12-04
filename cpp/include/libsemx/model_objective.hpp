@@ -35,6 +35,9 @@ public:
 
     [[nodiscard]] std::vector<double> constrained_derivatives(const std::vector<double>& unconstrained) const;
 
+    // Converts optimizer parameters (which might be Cholesky factors) back to model parameters (Variances/Covariances)
+    [[nodiscard]] std::vector<double> convert_to_model_parameters(const std::vector<double>& optimizer_parameters) const;
+
     [[nodiscard]] std::unordered_map<std::string, std::vector<double>> get_covariance_matrices(const std::vector<double>& constrained_parameters) const;
 
     // Helper to expose workspaces for diagnostics

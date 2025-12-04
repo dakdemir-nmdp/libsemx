@@ -22,6 +22,7 @@ struct FitResult {
     std::vector<double> vcov; // Flattened n x n matrix
     std::vector<std::string> parameter_names;
     std::unordered_map<std::string, std::vector<double>> covariance_matrices;
+    std::unordered_map<std::string, std::vector<double>> random_effects; // BLUPs / Conditional Modes
     double aic{0.0};
     double bic{0.0};
     double chi_square{std::numeric_limits<double>::quiet_NaN()};
@@ -89,6 +90,16 @@ public:
                                                 const std::unordered_map<std::string, DataParamMapping>& data_param_mappings = {},
                                                 const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {}) const;
 
+    [[nodiscard]] std::unordered_map<std::string, std::vector<double>> compute_random_effects(
+                                                const ModelIR& model,
+                                                const std::unordered_map<std::string, std::vector<double>>& data,
+                                                const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+                                                const std::unordered_map<std::string, std::vector<double>>& dispersions,
+                                                const std::unordered_map<std::string, std::vector<double>>& covariance_parameters = {},
+                                                const std::unordered_map<std::string, std::vector<double>>& status = {},
+                                                const std::unordered_map<std::string, std::vector<double>>& extra_params = {},
+                                                const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {}) const;
+
     [[nodiscard]] FitResult fit(const ModelIR& model,
                                          const std::unordered_map<std::string, std::vector<double>>& data,
                                          const OptimizationOptions& options,
@@ -96,6 +107,10 @@ public:
                                          const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                                          const std::unordered_map<std::string, std::vector<double>>& status = {},
                                          EstimationMethod method = EstimationMethod::ML) const;
+
+private:
+    // Cached Laplace system to avoid rebuilding block/group structure on every evaluation.
+    mutable std::shared_ptr<void> laplace_cache_;
 };
 
 }  // namespace libsemx

@@ -9,7 +9,8 @@ namespace libsemx {
 enum class VariableKind {
     Observed,
     Latent,
-    Grouping
+    Grouping,
+    Exogenous
 };
 
 enum class EdgeKind {
@@ -42,6 +43,7 @@ struct CovarianceSpec {
     std::string id;
     std::string structure;
     std::size_t dimension;
+    std::vector<CovarianceSpec> components;
 };
 
 struct RandomEffectSpec {

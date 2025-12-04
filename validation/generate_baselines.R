@@ -1,0 +1,22 @@
+library(lme4)
+data(sleepstudy)
+
+# 1. Standard LMM (REML=FALSE for ML comparison)
+fm1 <- lmer(Reaction ~ Days + (1 + Days | Subject), sleepstudy, REML=FALSE)
+print(summary(fm1))
+cat("AIC:", AIC(fm1), "\n")
+cat("BIC:", BIC(fm1), "\n")
+cat("LogLik:", logLik(fm1), "\n")
+cat("Ranef:\n")
+print(ranef(fm1))
+
+# 2. Binomial GLMM (Synthetic)
+# Binarize Reaction: 1 if > 250, 0 otherwise
+sleepstudy$ReactionBin <- as.integer(sleepstudy$Reaction > 250)
+gm1 <- glmer(ReactionBin ~ Days + (1 | Subject), sleepstudy, family=binomial)
+print(summary(gm1))
+cat("Binomial AIC:", AIC(gm1), "\n")
+cat("Binomial BIC:", BIC(gm1), "\n")
+cat("Binomial LogLik:", logLik(gm1), "\n")
+cat("Binomial Ranef:\n")
+print(ranef(gm1))

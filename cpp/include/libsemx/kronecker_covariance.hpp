@@ -12,6 +12,8 @@ public:
 
     [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
 
+    [[nodiscard]] const std::vector<std::unique_ptr<CovarianceStructure>>& components() const { return components_; }
+
 protected:
     void fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const override;
 

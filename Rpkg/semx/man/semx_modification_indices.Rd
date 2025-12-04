@@ -4,14 +4,14 @@
 \alias{semx_modification_indices}
 \title{Compute modification indices}
 \usage{
-semx_modification_indices(fit, model, data)
+semx_modification_indices(fit, model = NULL, data = NULL)
 }
 \arguments{
-\item{fit}{A FitResult object.}
+\item{fit}{A FitResult object or semx_fit object.}
 
-\item{model}{A semx_model object.}
+\item{model}{A semx_model object (optional if fit is semx_fit).}
 
-\item{data}{A list or data.frame containing the data.}
+\item{data}{A list or data.frame containing the data (optional if fit is semx_fit).}
 }
 \value{
 A data.frame containing modification indices.

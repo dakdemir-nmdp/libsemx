@@ -2,6 +2,8 @@
 #include "libsemx/parameter_transform.hpp"
 #include "libsemx/covariance_structure.hpp"
 
+#include <Eigen/Dense>
+
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
@@ -34,7 +36,11 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                     transform = make_identity_transform();
                     break;
             }
-            catalog_.register_parameter(param.id, param.initial_value, std::move(transform));
+            double init_val = param.initial_value;
+            if (status_.count(param.id) && !status_.at(param.id).empty()) {
+                init_val = status_.at(param.id)[0];
+            }
+            catalog_.register_parameter(param.id, init_val, std::move(transform));
         }
     } else {
         for (const auto& edge : model_.edges) {
@@ -50,9 +56,17 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                 continue;
             }
             if (edge.kind == EdgeKind::Covariance && edge.source == edge.target) {
-                catalog_.register_parameter(edge.parameter_id, kDefaultVarianceInit, make_log_transform());
+                double init_val = kDefaultVarianceInit;
+                if (status_.count(edge.parameter_id) && !status_.at(edge.parameter_id).empty()) {
+                    init_val = status_.at(edge.parameter_id)[0];
+                }
+                catalog_.register_parameter(edge.parameter_id, init_val, make_log_transform());
             } else {
-                catalog_.register_parameter(edge.parameter_id, kDefaultCoefficientInit, make_identity_transform());
+                double init_val = kDefaultCoefficientInit;
+                if (status_.count(edge.parameter_id) && !status_.at(edge.parameter_id).empty()) {
+                    init_val = status_.at(edge.parameter_id)[0];
+                }
+                catalog_.register_parameter(edge.parameter_id, init_val, make_identity_transform());
             }
         }
     }
@@ -74,6 +88,11 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
             bool positive = mask[i];
             auto transform = positive ? make_log_transform() : make_identity_transform();
             double init_val = positive ? kDefaultVarianceInit : kDefaultCoefficientInit;
+            
+            if (status_.count(param_name) && !status_.at(param_name).empty()) {
+                init_val = status_.at(param_name)[0];
+            }
+            
             catalog_.register_parameter(param_name, init_val, transform);
         }
         covariance_param_ranges_[cov.id] = {start_idx, count};
@@ -163,7 +182,11 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
             covariance_parameters[mapping.id] = std::move(params);
         }
         
-        return -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, status_, {}, fixed_covariance_data_, method_);
+        try {
+            return -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, status_, {}, fixed_covariance_data_, method_);
+        } catch (const std::runtime_error&) {
+            return std::numeric_limits<double>::infinity();
+        }
     }
 
     std::unordered_map<std::string, std::vector<double>> linear_predictors;
@@ -172,7 +195,11 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
 
     build_prediction_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
 
-    return -driver_.evaluate_model_loglik(model_, data_, linear_predictors, dispersions, covariance_parameters, status_, {}, fixed_covariance_data_, method_);
+    try {
+        return -driver_.evaluate_model_loglik(model_, data_, linear_predictors, dispersions, covariance_parameters, status_, {}, fixed_covariance_data_, method_);
+    } catch (const std::runtime_error&) {
+        return std::numeric_limits<double>::infinity();
+    }
 }
 
 std::vector<double> ModelObjective::gradient(const std::vector<double>& parameters) const {
@@ -292,19 +319,26 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
         }
         dispersion_param_mappings["_stacked_y"] = LikelihoodDriver::DataParamMapping{pattern, sem_outcomes_.size()};
 
-        auto value_and_grad = driver_.evaluate_model_loglik_and_gradient(
-            sem_model_,
-            sem_data_,
-            linear_predictors,
-            dispersions,
-            covariance_parameters,
-            status_,
-            {},
-            fixed_covariance_data_,
-            method_,
-            data_param_mappings,
-            dispersion_param_mappings
-        );
+        std::pair<double, std::unordered_map<std::string, double>> value_and_grad;
+        try {
+            value_and_grad = driver_.evaluate_model_loglik_and_gradient(
+                sem_model_,
+                sem_data_,
+                linear_predictors,
+                dispersions,
+                covariance_parameters,
+                status_,
+                {},
+                fixed_covariance_data_,
+                method_,
+                data_param_mappings,
+                dispersion_param_mappings
+            );
+        } catch (const std::runtime_error&) {
+            grad.assign(parameters.size(), 0.0);
+            return std::numeric_limits<double>::infinity();
+        }
+
         grad.assign(parameters.size(), 0.0);
         auto chain = catalog_.constrained_derivatives(parameters);
         
@@ -345,16 +379,66 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
 
     build_prediction_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
 
-    auto value_and_grad = driver_.evaluate_model_loglik_and_gradient(
-        model_,
-        data_,
-        linear_predictors,
-        dispersions,
-        covariance_parameters,
-        status_,
-        {},
-        fixed_covariance_data_,
-        method_);
+    std::unordered_map<std::string, LikelihoodDriver::DataParamMapping> dispersion_param_mappings;
+    
+    if (!sem_mode_) {
+        for (const auto& var : model_.variables) {
+            if (var.kind == VariableKind::Observed) {
+                std::string param_id;
+                for (const auto& edge : model_.edges) {
+                    if (edge.kind == EdgeKind::Covariance && edge.source == var.name && edge.target == var.name) {
+                        param_id = edge.parameter_id;
+                        break;
+                    }
+                }
+                
+                if (!param_id.empty()) {
+                    if (catalog_.find_index(param_id) != ParameterCatalog::npos) {
+                        LikelihoodDriver::DataParamMapping mapping;
+                        mapping.stride = 1;
+                        mapping.pattern = {param_id};
+                        dispersion_param_mappings[var.name] = mapping;
+                    }
+                }
+            }
+        }
+    } else {
+        std::vector<std::string> outcomes;
+        for (const auto& var : model_.variables) {
+            if (var.kind == VariableKind::Observed) {
+                outcomes.push_back(var.name);
+            }
+        }
+        for (const auto& info : residual_infos_) {
+            if (info.param_index != ParameterCatalog::npos && info.outcome_index < outcomes.size()) {
+                std::string var_name = outcomes[info.outcome_index];
+                std::string param_id = catalog_.names()[info.param_index];
+                LikelihoodDriver::DataParamMapping mapping;
+                mapping.stride = 1;
+                mapping.pattern = {param_id};
+                dispersion_param_mappings[var_name] = mapping;
+            }
+        }
+    }
+
+    std::pair<double, std::unordered_map<std::string, double>> value_and_grad;
+    try {
+        value_and_grad = driver_.evaluate_model_loglik_and_gradient(
+            model_,
+            data_,
+            linear_predictors,
+            dispersions,
+            covariance_parameters,
+            status_,
+            {},
+            fixed_covariance_data_,
+            method_,
+            {},
+            dispersion_param_mappings);
+    } catch (const std::runtime_error&) {
+        grad.assign(parameters.size(), 0.0);
+        return std::numeric_limits<double>::infinity();
+    }
         
     grad.assign(parameters.size(), 0.0);
     auto chain = catalog_.constrained_derivatives(parameters);
@@ -702,6 +786,61 @@ const std::vector<std::string>& ModelObjective::parameter_names() const { return
 
 std::vector<double> ModelObjective::initial_parameters() const {
     return catalog_.initial_unconstrained();
+}
+
+std::vector<double> ModelObjective::convert_to_model_parameters(const std::vector<double>& optimizer_parameters) const {
+    std::vector<double> model_params = optimizer_parameters;
+
+    for (const auto& mapping : sem_covariance_mappings_) {
+        // Find the covariance spec
+        const CovarianceSpec* spec = nullptr;
+        for (const auto& s : sem_model_.covariances) {
+            if (s.id == mapping.id) {
+                spec = &s;
+                break;
+            }
+        }
+        
+        if (spec && spec->structure == "unstructured") {
+            size_t dim = spec->dimension;
+            Eigen::MatrixXd L = Eigen::MatrixXd::Zero(dim, dim);
+            
+            // Reconstruct L
+            size_t elem_idx = 0;
+            for (size_t i = 0; i < dim; ++i) {
+                for (size_t j = 0; j <= i; ++j) {
+                    if (elem_idx < mapping.elements.size()) {
+                        const auto& elem = mapping.elements[elem_idx];
+                        double val = elem.fixed_value;
+                        if (elem.param_index != ParameterCatalog::npos) {
+                            val = optimizer_parameters[elem.param_index];
+                        }
+                        L(i, j) = val;
+                    }
+                    elem_idx++;
+                }
+            }
+            
+            // Compute Psi = L * L^T
+            Eigen::MatrixXd Psi = L * L.transpose();
+            
+            // Update model_params
+            elem_idx = 0;
+            for (size_t i = 0; i < dim; ++i) {
+                for (size_t j = 0; j <= i; ++j) {
+                    if (elem_idx < mapping.elements.size()) {
+                        const auto& elem = mapping.elements[elem_idx];
+                        if (elem.param_index != ParameterCatalog::npos) {
+                            model_params[elem.param_index] = Psi(i, j);
+                        }
+                    }
+                    elem_idx++;
+                }
+            }
+        }
+    }
+    
+    return model_params;
 }
 
 }  // namespace libsemx

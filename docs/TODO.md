@@ -1,6 +1,27 @@
 # libsemx TODO
 
 ## Active
+- [ ] Validation & Benchmarking against established software.
+    - [x] Create Python notebook comparing `libsemx` GLMM results with `statsmodels`/`lme4`.
+    - [x] Create R notebook comparing `libsemx` SEM/GLMM results with `lavaan`/`lme4`.
+        - [x] Implemented `ExplicitCovariance` to support standard SEM parameterization (elements of $\Sigma$).
+        - [x] Debug segfault in R validation script (Fixed: `ModelObjective` now correctly handles gradient vector resizing on exception).
+        - [x] Align C++ core results with `lme4` for `sleepstudy` dataset (Fixed: Dispersion parameter estimation in non-SEM mode).
+        - [x] Validate AIC, BIC, LogLik against `lme4`.
+        - [x] Create Binomial GLMM comparison (binary outcome) against `lme4::glmer`.
+        - [x] Validate Random Effects (BLUPs) against `lme4`.
+        - [x] Create SEM comparison against `lavaan` (Growth Curve or CFA).
+            - [x] Implemented CFA comparison using BFI dataset.
+            - [x] Validated LogLik, CFI, TLI, RMSEA, SRMR against `lavaan`.
+            - [x] Fixed SRMR calculation by converting Cholesky parameters back to Covariance parameters in `ModelObjective`.
+        - [x] Create GBLUP/GxE comparison against `sommer` (Coefficients, BLUPs, Fit Indices).
+            - [x] Implemented GBLUP and GxE tests in `cpp/tests/sommer_comparison_tests_v2.cpp`.
+            - [x] GxE results match `sommer` closely.
+            - [x] Investigate GBLUP variance inflation (factor ~3.2) in `libsemx` vs `sommer` expectation. (Resolved: `libsemx` finds better NLL; discrepancy likely due to external model definition).
+    - [ ] Create comparison for survival outcomes (vs `survival`/`coxme`).
+
+## Completed
+- [x] Fix `ModelObjective` initialization to respect `status` map for covariance parameters. (2025-02-24)
 - [x] Extend SEM branch to honor full structural model. (2025-12-02)
     - [x] Propagate regression edges into `_stacked_y` predictors.
     - [x] Carry intercepts/means.
@@ -82,8 +103,6 @@
     - [x] Extend ModelIR/bindings to ingest marker payloads directly.
     - [x] Add Python/R surfacing for genomic kernels and multi-environment fixtures.
 
-## Completed
-- [x] Fix LikelihoodDriver for SEM estimation (Latent Variables). (2025-02-24)
     - [x] Modified `ModelObjective` to handle "SEM mode" by stacking data and dynamically updating design matrices with Loading parameters.
     - [x] Verified with `python/semx/tests/test_sem_estimation.py` (Loadings are now estimated correctly).
 - [x] Expose post-estimation diagnostics to Python bindings. (2025-02-24)

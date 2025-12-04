@@ -4,14 +4,14 @@
 \alias{semx_standardized_solution}
 \title{Compute standardized estimates}
 \usage{
-semx_standardized_solution(fit, model, data)
+semx_standardized_solution(fit, model = NULL, data = NULL)
 }
 \arguments{
-\item{fit}{A FitResult object.}
+\item{fit}{A FitResult object or semx_fit object.}
 
-\item{model}{A semx_model object.}
+\item{model}{A semx_model object (optional if fit is semx_fit).}
 
-\item{data}{A list or data.frame containing the data.}
+\item{data}{A list or data.frame containing the data (optional if fit is semx_fit).}
 }
 \value{
 A list containing standardized estimates.

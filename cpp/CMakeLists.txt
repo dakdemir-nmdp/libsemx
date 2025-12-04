@@ -130,6 +130,9 @@ add_executable(libsemx_tests
     tests/mixed_model_gradient_tests.cpp
     tests/post_estimation_tests.cpp
     tests/sem_gradient_tests.cpp
+    tests/lme4_alignment_tests.cpp
+    tests/sommer_comparison_tests_v2.cpp
+    tests/lavaan_comparison_tests.cpp
 )
 
 target_link_libraries(libsemx_tests

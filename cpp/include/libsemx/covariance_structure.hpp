@@ -54,6 +54,16 @@ protected:
     [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
 };
 
+class ExplicitCovariance final : public CovarianceStructure {
+public:
+    explicit ExplicitCovariance(std::size_t dimension);
+
+protected:
+    void fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const override;
+
+    [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
+};
+
 class DiagonalCovariance final : public CovarianceStructure {
 public:
     explicit DiagonalCovariance(std::size_t dimension);

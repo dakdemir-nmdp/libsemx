@@ -1,0 +1,233 @@
+---
+title: "Comparison: libsemx vs lme4/lavaan"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools", repos = "https://cloud.r-project.org")
+if (!requireNamespace("lme4", quietly = TRUE)) install.packages("lme4", repos = "https://cloud.r-project.org")
+if (!requireNamespace("lavaan", quietly = TRUE)) install.packages("lavaan", repos = "https://cloud.r-project.org")
+if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr", repos = "https://cloud.r-project.org")
+if (!requireNamespace("knitr", quietly = TRUE)) install.packages("knitr", repos = "https://cloud.r-project.org")
+
+library(lme4)
+library(lavaan)
+library(dplyr)
+library(knitr)
+
+# Ensure NAMESPACE is up to date
+tryCatch(devtools::document("../Rpkg/semx"), error = function(e) warning("Could not document package: ", e$message))
+
+# Load semx from source
+devtools::load_all("../Rpkg/semx")
+```
+
+## Introduction
+
+This document compares `libsemx` with `lme4` for a Linear Mixed Model (LMM) using the `sleepstudy` dataset, and with `lavaan` for a CFA model.
+
+## Part 1: Linear Mixed Model (GLMM)
+
+We fit a random slope model: `Reaction ~ Days + (1 + Days | Subject)`.
+
+### 1.1 lme4 Implementation
+
+```{r lme4}
+data(sleepstudy, package = "lme4")
+fm1 <- lmer(Reaction ~ Days + (Days | Subject), sleepstudy, REML = FALSE) # Use ML for comparison
+summary(fm1)
+```
+
+### 1.2 libsemx Implementation
+
+```{r semx_glmm}
+# Prepare data: explicit intercept column needed for low-level interface
+sleepstudy$`_intercept` <- 1
+
+model_glmm <- semx_model(
+  equations = c(
+    "Reaction ~ _intercept + Days",
+    "Reaction ~~ Reaction"
+  ),
+  families = list(Reaction = "gaussian", Days = "gaussian", `_intercept` = "gaussian"),
+  random_effects = list(
+    list(
+      name = "subject_re",
+      variables = c("Subject", "_intercept", "Days"),
+      covariance = "re_cov"
+    )
+  ),
+  covariances = list(
+    list(name = "re_cov", structure = "unstructured", dimension = 2)
+  )
+)
+
+# Fit using LBFGS
+fit_glmm <- semx_fit(model_glmm, sleepstudy, optimizer_name = "lbfgs")
+summ_glmm <- summary(fit_glmm)
+print(summ_glmm)
+```
+
+### 1.3 Comparison
+
+```{r comparison_glmm}
+# Extract lme4 values
+fe_lme4 <- fixef(fm1)
+vc_lme4 <- VarCorr(fm1)
+sigma_lme4 <- sigma(fm1)
+
+# Extract semx values
+params_semx <- summ_glmm$parameters
+
+# Helper to safely get parameter
+get_param <- function(df, pattern) {
+  idx <- grep(pattern, rownames(df))
+  if (length(idx) > 0) df[idx[1], "Estimate"] else NA
+}
+
+fe_semx <- c(
+  Intercept = get_param(params_semx, "beta_Reaction_on__intercept"),
+  Days = get_param(params_semx, "beta_Reaction_on_Days")
+)
+
+fe_comp <- data.frame(
+  Parameter = c("Intercept", "Days"),
+  lme4 = as.numeric(fe_lme4),
+  semx = as.numeric(fe_semx)
+)
+fe_comp$Diff <- fe_comp$lme4 - fe_comp$semx
+kable(fe_comp, caption = "Fixed Effects Comparison")
+
+# Variance Components
+re_var_int_lme4 <- vc_lme4$Subject[1,1]
+re_cov_lme4 <- vc_lme4$Subject[1,2]
+re_var_slope_lme4 <- vc_lme4$Subject[2,2]
+resid_var_lme4 <- sigma_lme4^2
+
+re_var_int_semx <- get_param(params_semx, "re_cov_0")
+re_cov_semx <- get_param(params_semx, "re_cov_1")
+re_var_slope_semx <- get_param(params_semx, "re_cov_2")
+resid_var_semx <- get_param(params_semx, "psi_Reaction_Reaction")
+
+vc_comp <- data.frame(
+  Component = c("Subject (Intercept)", "Subject (Covariance)", "Subject (Slope)", "Residual"),
+  lme4 = c(re_var_int_lme4, re_cov_lme4, re_var_slope_lme4, resid_var_lme4),
+  semx = c(re_var_int_semx, re_cov_semx, re_var_slope_semx, resid_var_semx)
+)
+vc_comp$Diff <- vc_comp$lme4 - vc_comp$semx
+kable(vc_comp, caption = "Variance Components Comparison")
+
+# Likelihood
+ll_comp <- data.frame(
+  Metric = "Log-Likelihood",
+  lme4 = as.numeric(logLik(fm1)),
+  semx = summ_glmm$fit_indices$loglik
+)
+kable(ll_comp, caption = "Model Fit Comparison")
+```
+
+## Part 2: Structural Equation Model (CFA)
+
+We compare results for a standard CFA model using the `HolzingerSwineford1939` dataset.
+
+### 2.1 lavaan Implementation
+
+```{r lavaan}
+data(HolzingerSwineford1939)
+HS.model <- ' visual  =~ x1 + x2 + x3
+              textual =~ x4 + x5 + x6
+              speed   =~ x7 + x8 + x9 '
+
+fit_lav <- cfa(HS.model, data = HolzingerSwineford1939, std.lv = TRUE)
+summary(fit_lav, fit.measures = TRUE)
+```
+
+### 2.2 libsemx Implementation
+
+```{r semx_sem}
+model_sem <- semx_model(
+  equations = c(
+    "visual  =~ x1 + x2 + x3",
+    "textual =~ x4 + x5 + x6",
+    "speed   =~ x7 + x8 + x9"
+  ),
+  families = list(
+    x1="gaussian", x2="gaussian", x3="gaussian",
+    x4="gaussian", x5="gaussian", x6="gaussian",
+    x7="gaussian", x8="gaussian", x9="gaussian"
+  )
+)
+
+fit_semx <- semx_fit(model_sem, HolzingerSwineford1939, optimizer_name = "lbfgs")
+summ_semx <- summary(fit_semx)
+print(summ_semx)
+```
+
+### 2.3 Comparison
+
+```{r comparison_sem}
+# Extract lavaan estimates
+pe_lav <- parameterEstimates(fit_lav)
+pe_lav_loadings <- pe_lav[pe_lav$op == "=~", ]
+
+# Extract semx estimates
+params_semx <- summ_semx$parameters
+
+lav_est <- c()
+semx_est <- c()
+names_vec <- c()
+
+for(i in 1:nrow(pe_lav_loadings)) {
+  lhs <- pe_lav_loadings$lhs[i] # Latent
+  rhs <- pe_lav_loadings$rhs[i] # Observed
+  
+  # Construct semx ID
+  # Loadings in semx are typically lambda_{rhs}_on_{lhs} or similar if generated by builder
+  # But wait, semx_model builder uses "lambda" prefix.
+  # Let's check the output of print(summ_semx) to be sure.
+  # It usually generates IDs like "lambda_x1_on_visual" if not specified.
+  
+  # Try to find matching parameter
+  # We search for "lambda" and rhs and lhs
+  
+  pattern <- paste0("lambda.*", rhs, ".*", lhs) # Loose match
+  # Or strict: lambda_{rhs}_on_{lhs}
+  # Let's try strict first
+  id <- paste0("lambda_", rhs, "_on_", lhs)
+  
+  val <- get_param(params_semx, id)
+  if (is.na(val)) {
+      # Try alternative naming
+      id <- paste0("lambda_", lhs, "_", rhs)
+      val <- get_param(params_semx, id)
+  }
+  
+  if (!is.na(val)) {
+    names_vec <- c(names_vec, paste(lhs, "=~", rhs))
+    lav_est <- c(lav_est, pe_lav_loadings$est[i])
+    semx_est <- c(semx_est, val)
+  }
+}
+
+if (length(names_vec) > 0) {
+  load_comp <- data.frame(
+    Parameter = names_vec,
+    lavaan = lav_est,
+    semx = semx_est
+  )
+  load_comp$Diff <- load_comp$lavaan - load_comp$semx
+  kable(load_comp, caption = "Factor Loadings Comparison")
+} else {
+  print("Could not match parameter IDs automatically. Please check semx output.")
+}
+
+# Fit Indices
+fit_lav_meas <- fitMeasures(fit_lav)
+fi_comp <- data.frame(
+  Index = c("CFI", "TLI", "RMSEA", "SRMR", "AIC", "BIC"),
+  lavaan = c(fit_lav_meas["cfi"], fit_lav_meas["tli"], fit_lav_meas["rmsea"], fit_lav_meas["srmr"], fit_lav_meas["aic"], fit_lav_meas["bic"]),
+  semx = c(summ_semx$fit_indices$cfi, summ_semx$fit_indices$tli, summ_semx$fit_indices$rmsea, summ_semx$fit_indices$srmr, summ_semx$fit_indices$aic, summ_semx$fit_indices$bic)
+)
+kable(fi_comp, caption = "Fit Indices Comparison")
+```

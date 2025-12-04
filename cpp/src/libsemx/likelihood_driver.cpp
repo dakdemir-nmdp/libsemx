@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <memory>
 
 namespace libsemx {
 
@@ -235,7 +236,28 @@ std::vector<double> build_design_matrix(
     }
 
     if (info.design_vars.size() != q) {
-        throw std::runtime_error("Design variable count does not match covariance dimension for " + info.id);
+        // Special case: Single design variable with q > 1 implies categorical/index mapping
+        if (info.design_vars.size() == 1 && q > 1) {
+            const auto& values = resolve_design_values(info.design_vars[0], data, linear_predictors);
+            for (std::size_t row = 0; row < n_i; ++row) {
+                if (indices[row] >= values.size()) {
+                    throw std::runtime_error("Design variable " + info.design_vars[0] + " has insufficient data length");
+                }
+                double val = values[indices[row]];
+                // Check if integer
+                if (std::floor(val) != val) {
+                     throw std::runtime_error("Design variable " + info.design_vars[0] + " must be integer-valued for index mapping");
+                }
+                long col_idx = static_cast<long>(val);
+                if (col_idx < 0 || static_cast<std::size_t>(col_idx) >= q) {
+                     throw std::runtime_error("Index " + std::to_string(col_idx) + " out of bounds for covariance dimension " + std::to_string(q));
+                }
+                Z[row * q + col_idx] = 1.0;
+            }
+            return Z;
+        }
+        throw std::runtime_error("Design variable count (" + std::to_string(info.design_vars.size()) + 
+                                 ") does not match covariance dimension (" + std::to_string(q) + ") for " + info.id);
     }
 
     for (std::size_t col = 0; col < q; ++col) {
@@ -286,6 +308,130 @@ struct LaplaceSystemResult {
     std::vector<double> chol_neg_hessian;
     std::vector<OutcomeEvaluation> evaluations;
 };
+
+LaplaceSystem build_laplace_system(
+    const std::vector<RandomEffectInfo>& infos,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+    std::size_t n);
+
+struct LaplaceCache {
+    LaplaceSystem system;
+    std::vector<bool> block_static;
+    std::vector<std::size_t> block_info_index;
+    std::vector<std::string> re_ids;
+    std::vector<std::string> grouping_vars;
+    std::vector<std::size_t> q_dims;
+    std::size_t n = 0;
+
+    void reset() {
+        system = LaplaceSystem{};
+        block_static.clear();
+        block_info_index.clear();
+        re_ids.clear();
+        grouping_vars.clear();
+        q_dims.clear();
+        n = 0;
+    }
+};
+
+bool design_matrix_static(const RandomEffectInfo& info,
+                          const std::unordered_map<std::string, std::vector<double>>& data,
+                          const std::unordered_map<std::string, std::vector<double>>& linear_predictors) {
+    if (info.design_vars.empty()) {
+        return true;
+    }
+
+    for (const auto& var : info.design_vars) {
+        // Latent loading data are mutated between evaluations, so keep them dynamic.
+        if (var.rfind("_loading_", 0) == 0) {
+            return false;
+        }
+        if (data.count(var) == 0) {
+            // Pulled from linear predictors or missing; treat as dynamic.
+            return false;
+        }
+    }
+    return true;
+}
+
+LaplaceSystem& get_or_build_laplace_system(const std::vector<RandomEffectInfo>& infos,
+                                           const std::unordered_map<std::string, std::vector<double>>& data,
+                                           const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+                                           std::size_t n,
+                                           std::shared_ptr<void>& cache_handle) {
+    auto cache = std::static_pointer_cast<LaplaceCache>(cache_handle);
+    if (!cache) {
+        cache = std::make_shared<LaplaceCache>();
+        cache_handle = cache;
+    }
+
+    bool rebuild = cache->n != n || cache->re_ids.size() != infos.size();
+    if (!rebuild) {
+        for (std::size_t i = 0; i < infos.size(); ++i) {
+            if (cache->re_ids[i] != infos[i].id ||
+                cache->grouping_vars[i] != infos[i].grouping_var ||
+                cache->q_dims[i] != infos[i].cov_spec->dimension) {
+                rebuild = true;
+                break;
+            }
+        }
+    }
+
+    if (rebuild) {
+        cache->reset();
+        cache->n = n;
+        cache->re_ids.reserve(infos.size());
+        cache->grouping_vars.reserve(infos.size());
+        cache->q_dims.reserve(infos.size());
+
+        // Build a fresh system using the existing helper.
+        LaplaceSystem fresh = build_laplace_system(infos, data, linear_predictors, n);
+        cache->system = std::move(fresh);
+
+        // Record static/dynamic design metadata and block->info mapping.
+        cache->system.total_dim = 0;
+        for (const auto& block : cache->system.blocks) {
+            cache->system.total_dim = std::max(cache->system.total_dim, block.offset + block.q);
+        }
+
+        cache->block_static.reserve(cache->system.blocks.size());
+        cache->block_info_index.reserve(cache->system.blocks.size());
+
+        for (std::size_t info_idx = 0; info_idx < infos.size(); ++info_idx) {
+            const auto& info = infos[info_idx];
+            cache->re_ids.push_back(info.id);
+            cache->grouping_vars.push_back(info.grouping_var);
+            cache->q_dims.push_back(info.cov_spec->dimension);
+
+            bool static_design = design_matrix_static(info, data, linear_predictors);
+            auto group_map = build_group_map(info, data, n);
+            for ([[maybe_unused]] const auto& entry : group_map) {
+                cache->block_static.push_back(static_design);
+                cache->block_info_index.push_back(info_idx);
+            }
+        }
+
+        if (cache->block_static.size() != cache->system.blocks.size()) {
+            throw std::runtime_error("Laplace cache metadata mismatch");
+        }
+
+        return cache->system;
+    }
+
+    // Reuse layout; refresh pointers and any dynamic design matrices.
+    for (std::size_t block_idx = 0; block_idx < cache->system.blocks.size(); ++block_idx) {
+        const auto info_idx = cache->block_info_index[block_idx];
+        auto& block = cache->system.blocks[block_idx];
+        block.info = &infos[info_idx];
+
+        if (!cache->block_static[block_idx]) {
+            block.design_matrix = build_design_matrix(*block.info, block.obs_indices, data, linear_predictors);
+        }
+    }
+
+    return cache->system;
+}
 
 LaplaceSystem build_laplace_system(
     const std::vector<RandomEffectInfo>& infos,
@@ -1275,7 +1421,7 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
     }
     const auto& extra_vec = get_extra_params_for_variable(extra_params, obs_var_name);
 
-    LaplaceSystem system = build_laplace_system(random_effect_infos, data, linear_predictors, n);
+    LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, laplace_cache_);
     if (system.total_dim == 0) {
         throw std::runtime_error("Laplace system constructed without latent dimensions");
     }
@@ -1676,7 +1822,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
         }
         const auto& extra_vec = get_extra_params_for_variable(extra_params, obs_var_name);
 
-        LaplaceSystem system = build_laplace_system(random_effect_infos, data, linear_predictors, n);
+        LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, laplace_cache_);
         if (system.total_dim == 0) {
             throw std::runtime_error("Laplace system constructed without latent dimensions");
         }
@@ -2177,7 +2323,8 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                                     if (!pid.empty()) {
                                         double term1 = V_inv_i[r * n_i + r];
                                         double term2 = alpha(r) * alpha(r);
-                                        gradients[pid] += 0.5 * (term2 - term1);
+                                        double grad_val = 0.5 * (term2 - term1);
+                                        gradients[pid] += grad_val;
                                     }
                                 }
                             }
@@ -2534,7 +2681,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     }
     const auto& extra_vec = get_extra_params_for_variable(extra_params, obs_var_name);
 
-    LaplaceSystem system = build_laplace_system(random_effect_infos, data, linear_predictors, n);
+    LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, laplace_cache_);
     if (system.total_dim == 0) {
         throw std::runtime_error("Laplace system constructed without latent dimensions");
     }
@@ -2673,6 +2820,121 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     return {total_loglik, gradients};
 }
 
+std::unordered_map<std::string, std::vector<double>> LikelihoodDriver::compute_random_effects(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+    const std::unordered_map<std::string, std::vector<double>>& dispersions,
+    const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+    const std::unordered_map<std::string, std::vector<double>>& status,
+    const std::unordered_map<std::string, std::vector<double>>& extra_params,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data) const {
+
+    std::unordered_map<std::string, std::vector<double>> random_effects;
+
+    if (model.random_effects.empty()) {
+        return random_effects;
+    }
+
+    // 1. Identify observed variable and family
+    std::string obs_var_name;
+    std::string obs_family_name;
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Observed) {
+            bool is_target = false;
+            for (const auto& edge : model.edges) {
+                if (edge.target == var.name) {
+                    is_target = true;
+                    break;
+                }
+            }
+            if (is_target || obs_var_name.empty()) {
+                obs_var_name = var.name;
+                obs_family_name = var.family;
+            }
+        }
+    }
+    if (obs_var_name.empty()) {
+        return random_effects;
+    }
+
+    auto pred_it = linear_predictors.find(obs_var_name);
+    if (pred_it == linear_predictors.end()) {
+        if (linear_predictors.size() == 1) {
+            obs_var_name = linear_predictors.begin()->first;
+            auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
+                return v.name == obs_var_name;
+            });
+            if (var_it == model.variables.end()) {
+                return random_effects;
+            }
+            obs_family_name = var_it->family;
+            pred_it = linear_predictors.begin();
+        } else {
+            return random_effects;
+        }
+    }
+    const auto& pred_data = pred_it->second;
+
+    auto obs_it = data.find(obs_var_name);
+    if (obs_it == data.end()) {
+        return random_effects;
+    }
+    const auto& obs_data = obs_it->second;
+    size_t n = obs_data.size();
+
+    auto disp_it = dispersions.find(obs_var_name);
+    if (disp_it == dispersions.end()) {
+        return random_effects;
+    }
+    const auto& disp_data = disp_it->second;
+
+    // 2. Build RandomEffectInfos
+    auto random_effect_infos = build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, false);
+    if (random_effect_infos.empty()) return random_effects;
+
+    // 3. Build/Get Laplace System
+    std::shared_ptr<void> cache_handle;
+    LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, cache_handle);
+
+    if (system.total_dim == 0) return random_effects;
+
+    // 4. Solve Laplace System
+    auto outcome_family = OutcomeFamilyFactory::create(obs_family_name);
+    LaplaceSystemResult laplace_result;
+    
+    const std::vector<double>* status_vec = nullptr;
+    if (status.count(obs_var_name)) status_vec = &status.at(obs_var_name);
+    
+    const std::vector<double>* extra_vec = nullptr;
+    if (extra_params.count(obs_var_name)) extra_vec = &extra_params.at(obs_var_name);
+    const std::vector<double>& ep = extra_vec ? *extra_vec : std::vector<double>{};
+
+    if (!solve_laplace_system(system, obs_data, pred_data, disp_data, status_vec, ep, *outcome_family, laplace_result)) {
+        return random_effects;
+    }
+
+    // 5. Unpack 'u' into random_effects map
+    for(const auto& info : random_effect_infos) {
+        random_effects[info.id] = {};
+    }
+
+    for(const auto& block : system.blocks) {
+        if (!block.info) continue;
+        std::string id = block.info->id;
+        if (random_effects.find(id) == random_effects.end()) continue;
+        
+        std::vector<double>& vec = random_effects[id];
+        size_t start = block.offset;
+        size_t len = block.q;
+        if (start + len <= laplace_result.u.size()) {
+            vec.insert(vec.end(), laplace_result.u.begin() + start, laplace_result.u.begin() + start + len);
+        }
+    }
+
+    return random_effects;
+}
+
 namespace {
 
 
@@ -2728,9 +2990,54 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
     
     FitResult fit_result;
     fit_result.optimization_result = result;
-    fit_result.optimization_result.parameters = objective.to_constrained(result.parameters);
+    
+    // Convert parameters if necessary (e.g. Cholesky -> Covariance)
+    std::vector<double> constrained_params = objective.to_constrained(result.parameters);
+    fit_result.optimization_result.parameters = objective.convert_to_model_parameters(constrained_params);
+    
     fit_result.parameter_names = objective.parameter_names();
     fit_result.covariance_matrices = objective.get_covariance_matrices(fit_result.optimization_result.parameters);
+
+    // Compute Random Effects (BLUPs)
+    if (!model.random_effects.empty()) {
+        std::unordered_map<std::string, std::vector<double>> linear_predictors;
+        std::unordered_map<std::string, std::vector<double>> dispersions;
+        std::unordered_map<std::string, std::vector<double>> covariance_parameters;
+        
+        // Use original constrained parameters (L) for internal prediction workspaces
+        objective.build_prediction_workspaces(constrained_params, 
+                                              linear_predictors, 
+                                              dispersions, 
+                                              covariance_parameters);
+                                              
+        fit_result.random_effects = compute_random_effects(
+            model,
+            data,
+            linear_predictors,
+            dispersions,
+            covariance_parameters,
+            status,
+            {}, // extra_params
+            fixed_covariance_data
+        );
+    }
+
+    // Compute AIC/BIC regardless of convergence status (using final values)
+    double nll = result.objective_value;
+    size_t n = result.parameters.size();
+    double k = static_cast<double>(n);
+    
+    size_t sample_size = 0;
+    if (!data.empty()) {
+        sample_size = data.begin()->second.size();
+    }
+    
+    fit_result.aic = 2.0 * k + 2.0 * nll;
+    if (sample_size > 0) {
+        fit_result.bic = k * std::log(static_cast<double>(sample_size)) + 2.0 * nll;
+    } else {
+        fit_result.bic = std::numeric_limits<double>::quiet_NaN();
+    }
 
     if (result.converged) {
         try {
@@ -2739,7 +3046,6 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
             Eigen::MatrixXd vcov_unconstrained = hessian.inverse();
             
             std::vector<double> derivs = objective.constrained_derivatives(result.parameters);
-            size_t n = result.parameters.size();
             Eigen::MatrixXd J = Eigen::MatrixXd::Zero(n, n);
             for(size_t i=0; i<n; ++i) J(i,i) = derivs[i];
             
@@ -2753,21 +3059,6 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
             
             fit_result.vcov.resize(n*n);
             Eigen::Map<Eigen::MatrixXd>(fit_result.vcov.data(), n, n) = vcov_constrained;
-            
-            double nll = result.objective_value;
-            double k = static_cast<double>(n);
-            
-            size_t sample_size = 0;
-            if (!data.empty()) {
-                sample_size = data.begin()->second.size();
-            }
-            
-            fit_result.aic = 2.0 * k + 2.0 * nll;
-            if (sample_size > 0) {
-                fit_result.bic = k * std::log(static_cast<double>(sample_size)) + 2.0 * nll;
-            } else {
-                fit_result.bic = std::numeric_limits<double>::quiet_NaN();
-            }
 
             // Fit Indices (SEM only)
             if (model.random_effects.empty() && sample_size > 1) {
@@ -2886,15 +3177,13 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
              size_t n = result.parameters.size();
              fit_result.standard_errors.assign(n, std::numeric_limits<double>::quiet_NaN());
              fit_result.vcov.assign(n*n, std::numeric_limits<double>::quiet_NaN());
-             fit_result.aic = std::numeric_limits<double>::quiet_NaN();
-             fit_result.bic = std::numeric_limits<double>::quiet_NaN();
+             // Keep AIC/BIC as computed
         }
     } else {
          size_t n = result.parameters.size();
          fit_result.standard_errors.assign(n, std::numeric_limits<double>::quiet_NaN());
          fit_result.vcov.assign(n*n, std::numeric_limits<double>::quiet_NaN());
-         fit_result.aic = std::numeric_limits<double>::quiet_NaN();
-         fit_result.bic = std::numeric_limits<double>::quiet_NaN();
+         // Keep AIC/BIC as computed
     }
 
     return fit_result;

@@ -2,6 +2,7 @@
 #include "libsemx/scaled_fixed_covariance.hpp"
 #include "libsemx/multi_kernel_covariance.hpp"
 #include "libsemx/genomic_kernel.hpp"
+#include "libsemx/kronecker_covariance.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -239,6 +240,39 @@ std::vector<std::vector<double>> UnstructuredCovariance::parameter_gradients(con
                 grad[row * dim + j] += value;
                 grad[j * dim + row] += value;
             }
+        }
+    }
+    return grads;
+}
+
+ExplicitCovariance::ExplicitCovariance(std::size_t dimension)
+    : CovarianceStructure(dimension, dimension * (dimension + 1) / 2) {}
+
+void ExplicitCovariance::fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const {
+    const std::size_t dim = dimension();
+    std::fill(matrix.begin(), matrix.end(), 0.0);
+
+    std::size_t param_idx = 0;
+    for (std::size_t row = 0; row < dim; ++row) {
+        for (std::size_t col = 0; col <= row; ++col) {
+            double val = parameters[param_idx++];
+            matrix[row * dim + col] = val;
+            matrix[col * dim + row] = val;
+        }
+    }
+}
+
+std::vector<std::vector<double>> ExplicitCovariance::parameter_gradients(const std::vector<double>& parameters) const {
+    const std::size_t dim = dimension();
+    const std::size_t n_params = parameter_count();
+    std::vector<std::vector<double>> grads(n_params, std::vector<double>(dim * dim, 0.0));
+
+    std::size_t param_idx = 0;
+    for (std::size_t row = 0; row < dim; ++row) {
+        for (std::size_t col = 0; col <= row; ++col) {
+            auto& grad = grads[param_idx++];
+            grad[row * dim + col] = 1.0;
+            grad[col * dim + row] = 1.0;
         }
     }
     return grads;
@@ -536,6 +570,8 @@ std::unique_ptr<CovarianceStructure> create_covariance_structure(
 
     if (normalized == "unstructured") {
         return std::make_unique<UnstructuredCovariance>(spec.dimension);
+    } else if (normalized == "explicit") {
+        return std::make_unique<ExplicitCovariance>(spec.dimension);
     } else if (normalized == "diagonal") {
         return std::make_unique<DiagonalCovariance>(spec.dimension);
     } else if (normalized == "scaled_fixed") {
@@ -563,6 +599,15 @@ std::unique_ptr<CovarianceStructure> create_covariance_structure(
             throw std::runtime_error("Missing fixed covariance data for: " + spec.id);
         }
         return std::make_unique<MultiKernelCovariance>(fixed_it->second, spec.dimension);
+    } else if (normalized == "kronecker") {
+        if (spec.components.empty()) {
+            throw std::runtime_error("Kronecker covariance must have components: " + spec.id);
+        }
+        std::vector<std::unique_ptr<CovarianceStructure>> components;
+        for (const auto& comp_spec : spec.components) {
+            components.push_back(create_covariance_structure(comp_spec, fixed_covariance_data));
+        }
+        return std::make_unique<KroneckerCovariance>(std::move(components));
     } else if (normalized == "multi_kernel_simplex") {
         auto fixed_it = fixed_covariance_data.find(spec.id);
         if (fixed_it == fixed_covariance_data.end()) {
@@ -600,7 +645,7 @@ std::vector<bool> build_covariance_positive_mask(const CovarianceSpec& spec,
         return mask;
     }
 
-    if (normalized == "unstructured") {
+    if (normalized == "unstructured" || normalized == "explicit") {
         std::size_t idx = 0;
         for (std::size_t row = 0; row < spec.dimension; ++row) {
             for (std::size_t col = 0; col <= row; ++col) {
@@ -632,6 +677,28 @@ std::vector<bool> build_covariance_positive_mask(const CovarianceSpec& spec,
         if (!mask.empty()) {
             mask[0] = true; // sigma_sq is positive
             // Remaining parameters (weights) are free (softmax inputs)
+        }
+        return mask;
+    }
+
+    if (normalized == "kronecker") {
+        const auto* kron = dynamic_cast<const KroneckerCovariance*>(&structure);
+        if (!kron) {
+            throw std::runtime_error("Structure mismatch: expected KroneckerCovariance");
+        }
+        const auto& components = kron->components();
+        if (spec.components.size() != components.size()) {
+            throw std::runtime_error("Kronecker spec components count mismatch with structure");
+        }
+        
+        std::size_t offset = 0;
+        for (std::size_t i = 0; i < components.size(); ++i) {
+            auto sub_mask = build_covariance_positive_mask(spec.components[i], *components[i]);
+            for (bool val : sub_mask) {
+                if (offset < mask.size()) {
+                    mask[offset++] = val;
+                }
+            }
         }
         return mask;
     }

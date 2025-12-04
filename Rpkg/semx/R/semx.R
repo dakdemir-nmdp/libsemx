@@ -505,8 +505,16 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
             optimization_result = result$optimization_result,
             standard_errors = result$standard_errors,
             vcov = result$vcov,
+            parameter_names = result$parameter_names,
             aic = result$aic,
             bic = result$bic,
+            chi_square = result$chi_square,
+            df = result$df,
+            p_value = result$p_value,
+            cfi = result$cfi,
+            tli = result$tli,
+            rmsea = result$rmsea,
+            srmr = result$srmr,
             model = model,
             data = data
         ),
@@ -528,15 +536,26 @@ summary.semx_fit <- function(object, ...) {
   z_values <- params / ses
   p_values <- 2 * (1 - pnorm(abs(z_values)))
   
-  param_ids <- model$ir$parameter_ids()
+  param_ids <- object$parameter_names
+  if (is.null(param_ids)) {
+      # Fallback if parameter_names missing (e.g. old object)
+      param_ids <- model$ir$parameter_ids()
+  }
+  
+  # Debugging
+  if (length(param_ids) != length(params)) {
+      warning(sprintf("Parameter ID count (%d) does not match parameter count (%d)", length(param_ids), length(params)))
+  }
   
   param_table <- data.frame(
-    Estimate = params,
-    Std.Error = ses,
-    z.value = z_values,
-    P.value = p_values,
-    row.names = param_ids
+    Estimate = as.numeric(params),
+    Std.Error = as.numeric(ses),
+    z.value = as.numeric(z_values),
+    P.value = as.numeric(p_values)
   )
+  if (length(param_ids) == length(params)) {
+      rownames(param_table) <- param_ids
+  }
   
   fit_indices <- list(
     chisq = object$aic, # Placeholder, need to expose chi-square in Rcpp if not already
@@ -574,7 +593,7 @@ print.summary.semx_fit <- function(x, ...) {
   
   if (!is.nan(x$fit_indices$chisq)) {
     cat(sprintf("Chi-square: %.3f (df=%d)\n", x$fit_indices$chisq, as.integer(x$fit_indices$df)))
-    if (x$fit_indices$df > 0) {
+    if (!is.na(x$fit_indices$df) && x$fit_indices$df > 0) {
        pval <- 1 - pchisq(x$fit_indices$chisq, x$fit_indices$df)
        cat(sprintf("P-value: %.3f\n", pval))
     }
