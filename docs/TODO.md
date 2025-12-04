@@ -18,7 +18,10 @@
             - [x] Implemented GBLUP and GxE tests in `cpp/tests/sommer_comparison_tests_v2.cpp`.
             - [x] GxE results match `sommer` closely.
             - [x] Investigate GBLUP variance inflation (factor ~3.2) in `libsemx` vs `sommer` expectation. (Resolved: `libsemx` finds better NLL; discrepancy likely due to external model definition).
-    - [ ] Create comparison for survival outcomes (vs `survival`/`coxme`).
+    - [x] Create comparison for survival outcomes (vs `survival`/`coxme`).
+        - [x] Implemented Weibull and Exponential survival comparison against `survival::survreg` using Ovarian dataset.
+        - [x] Fixed `WeibullOutcome` gradient (added `d_dispersion`) to ensure convergence.
+        - [x] Validated LogLik, Coefficients, and Shape/Scale parameters.
 
 ## Completed
 - [x] Fix `ModelObjective` initialization to respect `status` map for covariance parameters. (2025-02-24)

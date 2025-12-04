@@ -53,7 +53,19 @@ OutcomeEvaluation WeibullOutcome::evaluate(double observed,
     const double hess = -k * k * z;
     const double third = k * k * k * z;
 
-    return {log_lik, grad, hess, third};
+    // dLL/dk
+    // z = exp(k * (log_t - eta))
+    // dz/dk = z * (log_t - eta)
+    // LL = -z + delta * (log(k) + (k-1)log_t - k*eta)
+    // dLL/dk = -z(log_t - eta) + delta * (1/k + log_t - eta)
+    //        = (delta - z) * (log_t - eta) + delta/k
+    
+    double d_dispersion = (delta - z) * (log_t - eta);
+    if (delta > 0.0) {
+        d_dispersion += delta / k;
+    }
+
+    return {log_lik, grad, hess, third, d_dispersion};
 }
 
 double WeibullOutcome::default_dispersion(std::size_t /*n*/) const {

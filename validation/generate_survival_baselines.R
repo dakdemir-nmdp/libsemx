@@ -1,5 +1,6 @@
 
 # validation/generate_survival_baselines.R
+options(echo=TRUE)
 
 library(survival)
 

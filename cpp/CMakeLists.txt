@@ -133,6 +133,7 @@ add_executable(libsemx_tests
     tests/lme4_alignment_tests.cpp
     tests/sommer_comparison_tests_v2.cpp
     tests/lavaan_comparison_tests.cpp
+    tests/survival_comparison_tests.cpp
 )
 
 target_link_libraries(libsemx_tests
