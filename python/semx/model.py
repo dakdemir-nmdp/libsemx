@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Union
+import copy
 
 import numpy as np
 import pandas as pd
@@ -589,6 +590,158 @@ class Model:
                 if not has_covariance:
                     self._add_covariance(l1.name, l2.name)
 
+    def copy(self) -> "Model":
+        """Create a deep copy of the model specification."""
+        # Create a dummy instance
+        new_model = Model(equations=["dummy ~ 1"], families={"dummy": "gaussian"})
+        
+        # Clear initialized state
+        new_model._variables.clear()
+        new_model._edges.clear()
+        new_model._covariances.clear()
+        new_model._random_effects.clear()
+        new_model._families.clear()
+        new_model._explicit_kinds.clear()
+        new_model._labels.clear()
+        new_model._measurement_levels.clear()
+        new_model._genomic_specs.clear()
+        new_model._param_counts.clear()
+        
+        # Copy state
+        new_model._equations = list(self._equations)
+        new_model._families = dict(self._families)
+        new_model._explicit_kinds = dict(self._explicit_kinds)
+        new_model._labels = dict(self._labels)
+        new_model._measurement_levels = dict(self._measurement_levels)
+        new_model._covariances = copy.deepcopy(self._covariances)
+        new_model._genomic_specs = copy.deepcopy(self._genomic_specs)
+        new_model._random_effects = copy.deepcopy(self._random_effects)
+        new_model._variables = copy.deepcopy(self._variables)
+        new_model._edges = copy.deepcopy(self._edges)
+        new_model._param_counts = dict(self._param_counts)
+        new_model._re_count = self._re_count
+        new_model._uses_intercept_column = self._uses_intercept_column
+        new_model._fixed_covariance_cache = copy.deepcopy(self._fixed_covariance_cache)
+        new_model._ir = None # Clear IR
+        
+        if hasattr(self, "_survival_status_map"):
+            new_model._survival_status_map = dict(self._survival_status_map)
+            
+        return new_model
+
+    def _expand_factors(self, data_dict: Dict[str, List[Any]]) -> Tuple["Model", Dict[str, List[Any]]]:
+        """Expand factor variables in data and update model specification."""
+        # Identify factor variables that are in the model
+        factor_vars = []
+        for name, var in self._variables.items():
+            if name in data_dict:
+                col = data_dict[name]
+                if col and isinstance(col[0], str):
+                    factor_vars.append(name)
+        
+        if not factor_vars:
+            return self, data_dict
+            
+        # Create copy
+        new_model = self.copy()
+        new_data = dict(data_dict)
+        
+        for name in factor_vars:
+            var_def = new_model._variables[name]
+            
+            # Handle Grouping Variables
+            if var_def.kind == VariableKind.Grouping:
+                # Convert to integer codes (0-based)
+                # We use pandas factorize to ensure consistent mapping
+                codes, uniques = pd.factorize(new_data[name], sort=True)
+                new_data[name] = codes.astype(float).tolist()
+                continue
+            
+            # Handle Design/Observed Variables (Expand to dummies)
+            s = pd.Series(new_data[name])
+            dummies = pd.get_dummies(s, prefix=name, prefix_sep="_", drop_first=False)
+            dummy_names = dummies.columns.tolist()
+            
+            # Add dummies to new_data
+            for d_name in dummy_names:
+                new_data[d_name] = dummies[d_name].astype(float).tolist()
+                # Register dummy family (default to gaussian/numeric)
+                if d_name not in new_model._families:
+                    new_model._families[d_name] = "gaussian"
+            
+            # Update Fixed Effects (Edges)
+            edges_to_remove = []
+            edges_to_add = []
+            
+            for i, edge in enumerate(new_model._edges):
+                if edge.kind == EdgeKind.Regression and edge.source == name:
+                    edges_to_remove.append(i)
+                    target = edge.target
+                    
+                    # Check if intercept is present for this target
+                    has_intercept = False
+                    for e in new_model._edges:
+                        if e.kind == EdgeKind.Regression and e.target == target and e.source == "_intercept":
+                            has_intercept = True
+                            break
+                    
+                    # Select dummies (drop first if intercept exists)
+                    selected_dummies = dummy_names[1:] if has_intercept else dummy_names
+                    
+                    for d_name in selected_dummies:
+                        new_model._ensure_variable(d_name, VariableKind.Observed)
+                        edges_to_add.append(_EdgeDef(
+                            kind=EdgeKind.Regression,
+                            source=d_name,
+                            target=target,
+                            parameter_id=new_model._next_parameter_id("beta", d_name, target)
+                        ))
+            
+            for i in sorted(edges_to_remove, reverse=True):
+                del new_model._edges[i]
+            new_model._edges.extend(edges_to_add)
+            
+            # Update Random Effects
+            for re in new_model._random_effects:
+                if name in re["variables"]:
+                    idx = -1
+                    try:
+                        idx = re["variables"].index(name)
+                    except ValueError:
+                        continue
+                        
+                    if idx == 0:
+                        # Grouping variable, already handled
+                        continue
+                    
+                    # Design variable
+                    has_intercept = "_intercept" in re["variables"]
+                    selected_dummies = dummy_names[1:] if has_intercept else dummy_names
+                    
+                    new_vars = []
+                    for v in re["variables"]:
+                        if v == name:
+                            for d in selected_dummies:
+                                new_model._ensure_variable(d, VariableKind.Observed)
+                                new_vars.append(d)
+                        else:
+                            new_vars.append(v)
+                    
+                    re["variables"] = new_vars
+                    
+                    # Update covariance dimension
+                    cov_name = re["covariance"]
+                    for cov in new_model._covariances:
+                        if cov["name"] == cov_name:
+                            cov["dimension"] = len(new_vars) - 1 # Subtract grouping
+                            break
+            
+            # Remove original variable
+            if name in new_model._variables:
+                del new_model._variables[name]
+                
+        return new_model, new_data
+
     def to_ir(self) -> ModelIR:
         """Materialize the shared IR structure (cached after first build)."""
 
@@ -688,6 +841,19 @@ class Model:
         else:
             data_dict = dict(data)
 
+        # Expand factor variables
+        model_to_fit, data_dict = self._expand_factors(data_dict)
+        
+        # If model changed, use the new model instance for the rest of the method
+        if model_to_fit is not self:
+            # We need to be careful here. self.to_ir() is called later.
+            # We should probably delegate to the new model's fit method to ensure consistency,
+            # but we need to avoid infinite recursion if _expand_factors returns a new model but data still has factors?
+            # _expand_factors converts factors to numeric (dummies or codes), so recursion should be safe.
+            # However, we already expanded data_dict.
+            # So we can just continue using model_to_fit.
+            pass
+
         # Filter out non-numeric columns to avoid pybind11 conversion errors
         # C++ expects std::unordered_map<std::string, std::vector<double>>
         keys_to_remove = []
@@ -698,7 +864,7 @@ class Model:
             del data_dict[k]
 
         # Inject intercept column if needed
-        if self._uses_intercept_column and "_intercept" not in data_dict:
+        if model_to_fit._uses_intercept_column and "_intercept" not in data_dict:
             # Find length of data
             n_rows = 0
             if data_dict:
@@ -706,7 +872,7 @@ class Model:
             data_dict["_intercept"] = [1.0] * n_rows
 
         # Compute sample stats for diagnostics
-        ir = self.to_ir()
+        ir = model_to_fit.to_ir()
         all_vars = [v.name for v in ir.variables]
         var_to_idx = {name: i for i, name in enumerate(all_vars)}
         n_total = len(all_vars)
@@ -755,15 +921,15 @@ class Model:
 
         # Prepare status map for survival models
         status_map: Dict[str, List[float]] = {}
-        if hasattr(self, "_survival_status_map"):
-            for time_var, status_var in self._survival_status_map.items():
+        if hasattr(model_to_fit, "_survival_status_map"):
+            for time_var, status_var in model_to_fit._survival_status_map.items():
                 if status_var not in df.columns:
                     raise ValueError(f"Status variable '{status_var}' for outcome '{time_var}' not found in data")
                 status_map[time_var] = df[status_var].astype(float).tolist()
 
         driver = LikelihoodDriver()
         merged_fixed: Dict[str, List[List[float]]] = dict(fixed_covariance_data or {})
-        for cov_id, kernel_list in self.fixed_covariance_data().items():
+        for cov_id, kernel_list in model_to_fit.fixed_covariance_data().items():
             merged_fixed.setdefault(cov_id, kernel_list)
 
         # Note: LikelihoodDriver.fit() signature in bindings needs to support 'status' argument

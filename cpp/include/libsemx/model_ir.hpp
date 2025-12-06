@@ -20,6 +20,8 @@ public:
 
     void add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id);
 
+    void register_parameter(std::string id, double initial_value = 0.0);
+
     [[nodiscard]] ModelIR build() const;
 
 private:

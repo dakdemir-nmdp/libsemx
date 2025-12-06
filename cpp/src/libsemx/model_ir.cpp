@@ -18,6 +18,10 @@ void ModelIRBuilder::add_random_effect(std::string id, std::vector<std::string> 
     graph_.add_random_effect(std::move(id), std::move(variables), std::move(covariance_id));
 }
 
+void ModelIRBuilder::register_parameter(std::string id, double initial_value) {
+    graph_.register_parameter(std::move(id), ParameterConstraint::Free, initial_value);
+}
+
 ModelIR ModelIRBuilder::build() const {
     return graph_.to_model_ir();
 }

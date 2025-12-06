@@ -103,7 +103,56 @@ OutcomeEvaluation OrdinalOutcome::evaluate(double observed,
     const double prob_sq = prob * prob;
     const double prob_cu = prob_sq * prob;
     double third = (prob_sq * d3P_deta3 - 3.0 * prob * d2P_deta2 * dP_deta + 2.0 * dP_deta * dP_deta * dP_deta) / prob_cu;
-    return {log_lik, grad, hess, third};
+    
+    std::vector<double> d_extra(extra_params.size(), 0.0);
+    std::vector<double> d_hess_extra(extra_params.size(), 0.0);
+
+    // Helper for d/dTau (LL'')
+    // LL'' = P''/P - (P'/P)^2
+    // d/dTau LL'' = d/dTau(P''/P) - 2(P'/P) d/dTau(P'/P)
+    // d/dTau(U/V) = (V U' - U V') / V^2
+    
+    auto compute_d_hess = [&](int idx, double dP_dTau, double dP_prime_dTau, double dP_double_prime_dTau) {
+        double term1_num = prob * dP_double_prime_dTau - d2P_deta2 * dP_dTau;
+        double term1 = term1_num / prob_sq;
+        
+        double term2_num = prob * dP_prime_dTau - dP_deta * dP_dTau;
+        double term2_inner = term2_num / prob_sq;
+        double term2 = 2.0 * grad * term2_inner;
+        
+        d_hess_extra[idx] = term1 - term2;
+    };
+
+    if (k > 0) {
+        // Lower threshold (index k-1)
+        // dP/dl = -phi(l-eta) = -dens_lower
+        // dP'/dl = -(l-eta)phi(l-eta) = -(l-eta)dens_lower
+        // dP''/dl = (1 - (l-eta)^2)phi(l-eta) = (1 - (l-eta)^2)dens_lower
+        // Correction: dP''/dl = d/dl (-z_l phi(z_l)) = -(1-z_l^2)phi(z_l) = (z_l^2 - 1)phi(z_l)
+        double x = lower_tau - eta;
+        double dP = -dens_lower;
+        double dPp = -x * dens_lower;
+        double dPpp = (1.0 - x*x) * dens_lower;
+        
+        d_extra[k-1] = dP / prob;
+        compute_d_hess(k-1, dP, dPp, dPpp);
+    }
+    if (k < static_cast<int>(extra_params.size())) {
+        // Upper threshold (index k)
+        // dP/du = phi(u-eta) = dens_upper
+        // dP'/du = (u-eta)phi(u-eta) = (u-eta)dens_upper
+        // dP''/du = ((u-eta)^2 - 1)phi(u-eta) = ((u-eta)^2 - 1)dens_upper
+        // Correction: dP''/du = d/du (z_u phi(z_u)) = (1-z_u^2)phi(z_u)
+        double x = upper_tau - eta;
+        double dP = dens_upper;
+        double dPp = x * dens_upper;
+        double dPpp = (x*x - 1.0) * dens_upper;
+        
+        d_extra[k] = dP / prob;
+        compute_d_hess(k, dP, dPp, dPpp);
+    }
+
+    return {log_lik, grad, hess, third, 0.0, d_extra, d_hess_extra};
 }
 
 double OrdinalOutcome::default_dispersion(std::size_t /*n*/) const {

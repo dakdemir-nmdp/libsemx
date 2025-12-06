@@ -30,6 +30,40 @@ grm_kronecker <- function(left, right) {
 	covariance = 2L
 )
 
+build_semx_ir <- function(variables, edges, covariances, random_effects, parameters = NULL) {
+    builder <- new(ModelIRBuilder)
+    
+    for (var_name in names(variables)) {
+        entry <- variables[[var_name]]
+        builder$add_variable(
+            entry$name,
+            entry$kind,
+            entry$family,
+            entry$label %||% "",
+            entry$measurement_level %||% ""
+        )
+    }
+    for (edge in edges) {
+        builder$add_edge(edge$kind, edge$source, edge$target, edge$parameter_id)
+    }
+    for (cov in covariances) {
+        builder$add_covariance(cov$name, cov$structure, cov$dimension)
+    }
+    if (!is.null(random_effects)) {
+        for (re in random_effects) {
+            builder$add_random_effect(re$name, re$variables, re$covariance)
+        }
+    }
+    if (!is.null(parameters)) {
+        for (param_name in names(parameters)) {
+            val <- parameters[[param_name]]
+            builder$register_parameter(param_name, as.numeric(val))
+        }
+    }
+    
+    builder$build()
+}
+
 #' Build a ModelIR from high-level equations
 #'
 #' This helper parses simple lavaan-style equations (\code{=~}, \code{~}, \code{~~})
@@ -44,11 +78,13 @@ grm_kronecker <- function(left, right) {
 #' @param genomic Optional named list of genomic covariance specs; each entry should provide
 #'   a numeric matrix `markers` and optional `structure`, `center`, and `normalize` flags.
 #' @param random_effects Optional list of random effect definitions (name, variables, covariance).
+#' @param data Optional list or data.frame containing data. If provided, it can be used to resolve
+#'   genomic matrices referenced in `genomic` specs or equations.
 #'
 #' @return A list with class \code{semx_model} that contains the compiled
 #'   \code{ir}, \code{variables}, and \code{edges} components.
 #' @export
-semx_model <- function(equations, families, kinds = NULL, covariances = NULL, genomic = NULL, random_effects = NULL) {
+semx_model <- function(equations, families, kinds = NULL, covariances = NULL, genomic = NULL, random_effects = NULL, data = NULL) {
 	if (missing(equations) || length(equations) == 0L) {
 		stop("at least one equation is required", call. = FALSE)
 	}
@@ -92,6 +128,7 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 	random_effects <- random_effects %||% list()
 	re_count <- 0L
 	uses_intercept_column <- FALSE
+	status_vars <- list()
 
 	next_parameter_id <- function(prefix, source, target) {
 		base <- if (identical(prefix, "psi")) {
@@ -195,7 +232,7 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 		if (identical(desired_kind, .variable_kind_codes[["observed"]])) {
 			family <- fam_map[[normalized]] %||% ""
 			if (!nzchar(family)) {
-				stop(sprintf("observed variable '%s' requires a family", normalized), call. = FALSE)
+				family <- "fixed"
 			}
 		}
 
@@ -205,20 +242,70 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 		entry
 	}
 
-	add_edge <- function(kind, source, target, prefix) {
+	parse_term_with_fixed <- function(term) {
+		if (grepl("*", term, fixed = TRUE)) {
+			parts <- strsplit(term, "*", fixed = TRUE)[[1]]
+			if (length(parts) == 2) {
+				val_str <- trimws(parts[[1]])
+				var <- trimws(parts[[2]])
+				# Handle "NA" for freeing a parameter (not fully supported yet but good to parse)
+				if (val_str == "NA") {
+					return(list(var = var, val = NA)) 
+				}
+				val <- as.numeric(val_str)
+				if (!is.na(val)) {
+					return(list(var = var, val = val))
+				}
+			}
+		}
+		return(list(var = term, val = NULL))
+	}
+
+	parse_genomic_group <- function(term) {
+		if (startsWith(term, "genomic(") && endsWith(term, ")")) {
+			content <- substr(term, 9, nchar(term) - 1)
+			parts <- trimws(strsplit(content, ",")[[1]])
+			if (length(parts) == 1) {
+				return(list(var = parts[1], cov = parts[1])) # Default cov name same as var
+			} else if (length(parts) == 2) {
+				return(list(var = parts[1], cov = parts[2]))
+			}
+		}
+		NULL
+	}
+
+	add_edge <- function(kind, source, target, prefix, fixed_val = NULL) {
+		pid <- if (!is.null(fixed_val) && !is.na(fixed_val)) as.character(fixed_val) else next_parameter_id(prefix, source, target)
 		edges[[length(edges) + 1L]] <<- list(
 			kind = kind,
 			source = source,
 			target = target,
-			parameter_id = next_parameter_id(prefix, source, target)
+			parameter_id = pid
 		)
 	}
 
-	add_random_effect <- function(spec) {
+	add_random_effect <- function(spec, target) {
 		group <- spec$grouping
 		design <- spec$design
 		intercept <- spec$intercept
 		
+		cov_structure_type <- "unstructured"
+		is_genomic <- FALSE
+		cov_name_override <- NULL
+		
+		genomic_parsed <- parse_genomic_group(group)
+		if (!is.null(genomic_parsed)) {
+			is_genomic <- TRUE
+			group <- "_genomic_group_"
+			cov_name_override <- genomic_parsed$cov
+			cov_structure_type <- "grm"
+			
+			# Use the ID variable as the design variable (index)
+			# This enables the C++ backend to map observations to K matrix rows
+			design <- c(genomic_parsed$var)
+			intercept <- FALSE
+		}
+
 		ensure_variable(group, .variable_kind_codes[["grouping"]], enforce_kind = TRUE, respect_explicit = TRUE)
 		
 		ir_vars <- c(group)
@@ -233,7 +320,7 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 				ir_vars <- c(ir_vars, "_intercept")
 				uses_intercept_column <<- TRUE
 				if (is.null(fam_map[["_intercept"]])) {
-					fam_map[["_intercept"]] <<- "gaussian"
+					fam_map[["_intercept"]] <<- ""
 				}
 				ensure_variable("_intercept", .variable_kind_codes[["observed"]])
 			}
@@ -244,20 +331,60 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 			dimension <- length(ir_vars) - 1L
 		}
 		
-		re_count <<- re_count + 1L
-		cov_name <- sprintf("cov_re_%d", re_count)
+		if (is_genomic) {
+			# For genomic/GRM, the dimension is the size of the kernel (N)
+			# We try to find it in genomic spec or data
+			found_dim <- NA_integer_
+			
+			# Check genomic arg
+			if (!is.null(genomic[[cov_name_override]])) {
+				entry <- genomic[[cov_name_override]]
+				if (!is.null(entry$markers)) found_dim <- nrow(entry$markers)
+				if (!is.null(entry$data)) found_dim <- nrow(entry$data)
+			}
+			
+			# Check data arg
+			if (is.na(found_dim) && !is.null(data[[cov_name_override]])) {
+				mat <- data[[cov_name_override]]
+				if (is.matrix(mat) || inherits(mat, "Matrix")) {
+					found_dim <- nrow(mat)
+				}
+			}
+			
+			if (!is.na(found_dim)) {
+				dimension <- found_dim
+			} else {
+				warning(sprintf("Could not determine dimension for genomic covariance '%s'. Ensure it is provided in 'genomic' or 'data'.", cov_name_override), call. = FALSE)
+			}
+			
+			cov_name <- cov_name_override
+		} else {
+			cov_name <- sprintf("cov_re_%d", re_count + 1L)
+		}
 		
-		covariances <<- c(covariances, list(list(
-			name = cov_name,
-			structure = "unstructured",
-			dimension = dimension
-		)))
+		re_count <<- re_count + 1L
+		re_name <- sprintf("re_%s_%d", group, re_count)
+		
+		# Add to covariances if not exists
+		exists <- FALSE
+		for (c in covariances) if (c$name == cov_name) exists <- TRUE
+		
+		if (!exists) {
+			covariances <<- c(covariances, list(list(
+				name = cov_name,
+				structure = cov_structure_type,
+				dimension = dimension
+			)))
+		}
 		
 		random_effects <<- c(random_effects, list(list(
-			name = sprintf("re_%s_%d", group, re_count),
+			name = re_name,
 			variables = ir_vars,
 			covariance = cov_name
 		)))
+
+		ensure_variable(re_name, .variable_kind_codes[["latent"]], enforce_kind = TRUE, respect_explicit = FALSE)
+		add_edge(.edge_kind_codes[["regression"]], re_name, target, "beta", fixed_val = 1.0)
 	}
 
 	for (eq in eqs) {
@@ -269,47 +396,177 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 			if (!length(rhs_terms)) {
 				stop(sprintf("loading equation for %s is empty", latent), call. = FALSE)
 			}
-			for (indicator in rhs_terms) {
+			first_indicator <- TRUE
+			for (indicator_raw in rhs_terms) {
+				parsed <- parse_term_with_fixed(indicator_raw)
+				indicator <- parsed$var
+				fixed_val <- parsed$val
+				
+				# Automatic identification: Fix first indicator to 1.0 if not specified
+				if (first_indicator && is.null(fixed_val)) {
+					fixed_val <- 1.0
+				}
+				first_indicator <- FALSE
+
 				obs_var <- ensure_variable(indicator, .variable_kind_codes[["observed"]], enforce_kind = TRUE, respect_explicit = FALSE)
-				add_edge(.edge_kind_codes[["loading"]], latent_var$name, obs_var$name, "lambda")
+				add_edge(.edge_kind_codes[["loading"]], latent_var$name, obs_var$name, "lambda", fixed_val)
 			}
 		} else if (grepl("~~", eq, fixed = TRUE)) {
 			parts <- strsplit(eq, "~~", fixed = TRUE)[[1]]
-			lhs <- trimws(parts[[1]])
-			rhs <- trimws(parts[[2]])
+			lhs_raw <- trimws(parts[[1]])
+			rhs_raw <- trimws(parts[[2]])
+			
+			parsed_lhs <- parse_term_with_fixed(lhs_raw) # Usually no fixed val on LHS
+			parsed_rhs <- parse_term_with_fixed(rhs_raw)
+			
+			lhs <- parsed_lhs$var
+			rhs <- parsed_rhs$var
+			fixed_val <- parsed_rhs$val # Take fixed value from RHS if present (e.g. x ~~ 1*x)
+
 			left <- ensure_variable(lhs, .variable_kind_codes[["observed"]])
 			right <- ensure_variable(rhs, .variable_kind_codes[["observed"]])
 			ordered <- sort(c(left$name, right$name))
-			add_edge(.edge_kind_codes[["covariance"]], ordered[[1]], ordered[[2]], "psi")
+			
+			add_edge(.edge_kind_codes[["covariance"]], ordered[1], ordered[2], "psi", fixed_val)
 		} else if (grepl("~", eq, fixed = TRUE)) {
 			parts <- strsplit(eq, "~", fixed = TRUE)[[1]]
 			target <- trimws(parts[[1]])
+			
+			# Check for Surv(time, status) syntax
+			if (startsWith(target, "Surv(") && endsWith(target, ")")) {
+				content <- substr(target, 6, nchar(target) - 1)
+				args <- trimws(strsplit(content, ",")[[1]])
+				if (length(args) != 2) {
+					stop(sprintf("Surv() requires exactly 2 arguments (time, status), got: %s", target), call. = FALSE)
+				}
+				time_var <- args[[1]]
+				status_var <- args[[2]]
+				
+				target <- time_var
+				status_vars[[time_var]] <- status_var
+			}
+
 			predictors <- split_terms(parts[[2]])
+			
+			# Check if intercept is explicitly included or excluded
+			has_explicit_intercept <- FALSE
+			has_explicit_zero <- FALSE
+			
+			for (p in predictors) {
+				if (p == "0") has_explicit_zero <- TRUE
+				if (p == "1") has_explicit_intercept <- TRUE
+				
+				# Check for fixed intercept like 0*1 or 1*1
+				parsed <- parse_term_with_fixed(p)
+				if (parsed$var == "1") {
+					has_explicit_intercept <- TRUE
+				}
+			}
+
+			# Handle implicit intercept: add "1" unless "0" is present or "1" is already there
+			if (!has_explicit_zero && !has_explicit_intercept) {
+				predictors <- c(predictors, "1")
+			}
+
+			target_var <- ensure_variable(target, .variable_kind_codes[["observed"]])
 			target_var <- ensure_variable(target, .variable_kind_codes[["observed"]])
 			if (!length(predictors)) {
 				stop(sprintf("regression equation for %s is empty", target), call. = FALSE)
 			}
-			for (predictor in predictors) {
+			for (predictor_raw in predictors) {
+				parsed <- parse_term_with_fixed(predictor_raw)
+				predictor <- parsed$var
+				fixed_val <- parsed$val
+
 				mixed <- parse_mixed_term(predictor)
 				if (!is.null(mixed)) {
-					add_random_effect(mixed)
+					add_random_effect(mixed, target)
 					next
 				}
 				
-				if (predictor %in% c("1", "0")) {
+				if (predictor == "1") {
+					uses_intercept_column <- TRUE
+					if (is.null(fam_map[["_intercept"]])) {
+						fam_map[["_intercept"]] <- "fixed"
+					}
+					ensure_variable("_intercept", .variable_kind_codes[["observed"]])
+					add_edge(.edge_kind_codes[["regression"]], "_intercept", target_var$name, "alpha", fixed_val)
+					next
+				}
+				if (predictor == "0") {
 					next
 				}
 				source_var <- ensure_variable(predictor, .variable_kind_codes[["observed"]])
-				add_edge(.edge_kind_codes[["regression"]], source_var$name, target_var$name, "beta")
+				add_edge(.edge_kind_codes[["regression"]], source_var$name, target_var$name, "beta", fixed_val)
 			}
 		} else {
 			stop(sprintf("unrecognized equation: %s", eq), call. = FALSE)
 		}
 	}
 
+	# Add default variances/dispersions for variables if not present
+	for (var_name in var_order) {
+		entry <- var_defs[[var_name]]
+		
+		# Families that typically have a dispersion/variance parameter
+		has_dispersion <- entry$family %in% c("gaussian", "negative_binomial", "nbinom", "weibull", "weibull_aft", "lognormal", "lognormal_aft", "loglogistic", "loglogistic_aft", "gamma")
+		
+		is_observed_dispersion <- (entry$kind == .variable_kind_codes[["observed"]] && 
+		                           has_dispersion && 
+		                           var_name != "_intercept")
+		is_latent <- (entry$kind == .variable_kind_codes[["latent"]])
+		
+		# Check if it's a random effect latent (which has its variance defined via random_effects list)
+		is_re_latent <- FALSE
+		if (!is.null(random_effects)) {
+			for (re in random_effects) {
+				if (re$name == var_name) {
+					is_re_latent <- TRUE
+					break
+				}
+			}
+		}
+
+		if (is_observed_dispersion || (is_latent && !is_re_latent)) {
+			# Check if self-covariance exists
+			has_var <- FALSE
+			for (edge in edges) {
+				if (edge$kind == .edge_kind_codes[["covariance"]] && 
+				    edge$source == var_name && 
+				    edge$target == var_name) {
+					has_var <- TRUE
+					break
+				}
+			}
+			if (!has_var) {
+				add_edge(.edge_kind_codes[["covariance"]], var_name, var_name, "psi")
+			}
+		}
+	}
+
 	covariances <- covariances %||% list()
+	genomic <- genomic %||% list()
+
+	# Auto-discover genomic specs from data if referenced in covariances
+	if (!is.null(data)) {
+		for (cov in covariances) {
+			# If structure is "grm" (or similar custom), check if we have data for it by name
+			if (cov$structure == "grm") {
+				if (is.null(genomic[[cov$name]])) {
+					# Check if data has it
+					if (!is.null(data[[cov$name]])) {
+						mat <- data[[cov$name]]
+						if (is.matrix(mat) || inherits(mat, "Matrix")) {
+							genomic[[cov$name]] <- list(data = mat, precomputed = TRUE)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	genomic_data <- list()
-	if (!is.null(genomic)) {
+	if (length(genomic) > 0L) {
 		if (is.null(names(genomic)) || any(names(genomic) == "")) {
 			stop("genomic specifications must be a named list", call. = FALSE)
 		}
@@ -381,30 +638,11 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 		}
 	}
 
-	builder <- new(ModelIRBuilder)
-	for (var_name in var_order) {
-		entry <- var_defs[[var_name]]
-		builder$add_variable(
-			entry$name,
-			entry$kind,
-			entry$family,
-			entry$label %||% "",
-			entry$measurement_level %||% ""
-		)
-	}
-	for (edge in edges) {
-		builder$add_edge(edge$kind, edge$source, edge$target, edge$parameter_id)
-	}
+	ir <- build_semx_ir(var_defs[var_order], edges, covariances, random_effects)
 
-	for (cov in covariances) {
-		builder$add_covariance(cov$name, cov$structure, cov$dimension)
-	}
-
-	if (!is.null(random_effects)) {
-		for (re in random_effects) {
-			builder$add_random_effect(re$name, re$variables, re$covariance)
-		}
-	}
+    # Debug print
+    print(paste("Var order:", paste(var_order, collapse=", ")))
+    print(paste("Var defs names:", paste(names(var_defs), collapse=", ")))
 
 	fixed_covariance_data <- list()
 	if (length(genomic_data)) {
@@ -421,14 +659,15 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 
 	structure(
 		list(
-			ir = builder$build(),
+			ir = ir,
 			variables = var_defs,
 			edges = edges,
 			covariances = covariances,
 			genomic_data = genomic_data,
 			fixed_covariance_data = fixed_covariance_data,
 			random_effects = random_effects,
-			uses_intercept_column = uses_intercept_column
+			uses_intercept_column = uses_intercept_column,
+			status_vars = status_vars
 		),
 		class = "semx_model"
 	)
@@ -441,9 +680,10 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 #' @param options Optimization options.
 #' @param optimizer_name Name of the optimizer ("lbfgs" or "gd").
 #' @param fixed_covariance_data Optional list of fixed covariance matrices.
+#' @param estimation_method Estimation method ("ML" or "REML").
 #' @return A FitResult object.
 #' @export
-semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixed_covariance_data = NULL) {
+semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixed_covariance_data = NULL, estimation_method = "ML") {
     if (!inherits(model, "semx_model")) {
         stop("model must be a semx_model object")
     }
@@ -451,6 +691,8 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
     if (is.null(options)) {
         options <- new(OptimizationOptions)
     }
+    
+    method_code <- if (toupper(estimation_method) == "REML") 1L else 0L
     
     # Inject intercept column if needed
     if (isTRUE(model$uses_intercept_column) && is.null(data[["_intercept"]])) {
@@ -464,6 +706,187 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
         
         if (n_rows > 0L) {
             data[["_intercept"]] <- rep(1.0, n_rows)
+        }
+    }
+
+    # Expand factor variables used as design variables (predictors)
+    factor_vars <- character()
+    if (is.data.frame(data)) {
+        for (col_name in names(data)) {
+            if (col_name %in% names(model$variables)) {
+                var_def <- model$variables[[col_name]]
+                # Only expand if NOT grouping variable AND family is "fixed" (i.e. predictor)
+                if (var_def$kind != .variable_kind_codes[["grouping"]] && var_def$family == "fixed") {
+                    col <- data[[col_name]]
+                    if (is.character(col) || is.factor(col)) {
+                        factor_vars <- c(factor_vars, col_name)
+                    }
+                }
+            }
+        }
+    }
+    
+    if (length(factor_vars) > 0) {
+        print(paste("Expanding factors:", paste(factor_vars, collapse=", ")))
+        for (name in factor_vars) {
+            # Generate dummies (all levels)
+            f <- as.formula(paste("~ 0 +", name))
+            dummies <- model.matrix(f, data)
+            dummy_names <- colnames(dummies)
+            
+            # Add dummies to data
+            for (d_name in dummy_names) {
+                data[[d_name]] <- as.numeric(dummies[, d_name])
+                if (is.null(model$variables[[d_name]])) {
+                    model$variables[[d_name]] <- list(
+                        name = d_name,
+                        kind = .variable_kind_codes[["observed"]],
+                        family = "gaussian"
+                    )
+                }
+            }
+            
+            # Update Edges (Fixed Effects)
+            edges_to_remove <- integer()
+            edges_to_add <- list()
+            
+            for (i in seq_along(model$edges)) {
+                edge <- model$edges[[i]]
+                if (edge$kind == .edge_kind_codes[["regression"]] && edge$source == name) {
+                    edges_to_remove <- c(edges_to_remove, i)
+                    target <- edge$target
+                    
+                    has_intercept <- FALSE
+                    for (e in model$edges) {
+                        if (e$kind == .edge_kind_codes[["regression"]] && e$target == target && e$source == "_intercept") {
+                            has_intercept <- TRUE
+                            break
+                        }
+                    }
+                    
+                    selected_dummies <- if (has_intercept) dummy_names[-1] else dummy_names
+                    
+                    for (d_name in selected_dummies) {
+                        param_id <- paste0("beta_", target, "_on_", d_name)
+                        edges_to_add <- c(edges_to_add, list(list(
+                            kind = .edge_kind_codes[["regression"]],
+                            source = d_name,
+                            target = target,
+                            parameter_id = param_id
+                        )))
+                    }
+                }
+            }
+            
+            if (length(edges_to_remove) > 0) {
+                model$edges <- model$edges[-edges_to_remove]
+                model$edges <- c(model$edges, edges_to_add)
+            }
+            
+            # Update Random Effects
+            if (!is.null(model$random_effects)) {
+                for (i in seq_along(model$random_effects)) {
+                    re <- model$random_effects[[i]]
+                    if (name %in% re$variables) {
+                        if (re$variables[[1]] == name) next
+                        
+                        has_intercept <- "_intercept" %in% re$variables
+                        selected_dummies <- if (has_intercept) dummy_names[-1] else dummy_names
+                        
+                        new_vars <- character()
+                        for (v in re$variables) {
+                            if (v == name) {
+                                new_vars <- c(new_vars, selected_dummies)
+                            } else {
+                                new_vars <- c(new_vars, v)
+                            }
+                        }
+                        
+                        model$random_effects[[i]]$variables <- new_vars
+                        
+                        cov_name <- re$covariance
+                        for (j in seq_along(model$covariances)) {
+                            if (model$covariances[[j]]$name == cov_name) {
+                                model$covariances[[j]]$dimension <- length(new_vars) - 1
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            
+            model$variables[[name]] <- NULL
+        }
+    }
+
+    # Handle Ordinal Outcomes: Register Threshold Parameters
+    ordinal_params_added <- FALSE
+    extra_param_mappings <- list()
+    if (is.data.frame(data)) {
+        for (col_name in names(data)) {
+            if (col_name %in% names(model$variables)) {
+                var_def <- model$variables[[col_name]]
+                if (var_def$family == "ordinal") {
+                    col <- data[[col_name]]
+                    n_levels <- length(unique(col))
+                    if (n_levels < 2) stop(paste("Ordinal variable", col_name, "must have at least 2 levels"))
+                    
+                    # Register K-1 thresholds
+                    if (is.null(model$parameters)) model$parameters <- list()
+                    
+                    thresholds <- character()
+                    for (k in 1:(n_levels-1)) {
+                        param_id <- paste0(col_name, "_threshold_", k)
+                        # Initial values: spread them out around 0
+                        init_val <- qnorm(k / n_levels)
+                        model$parameters[[param_id]] <- init_val
+                        thresholds <- c(thresholds, param_id)
+                    }
+                    extra_param_mappings[[col_name]] <- thresholds
+                    ordinal_params_added <- TRUE
+                }
+            }
+        }
+    }
+        
+    if (length(factor_vars) > 0 || ordinal_params_added) {
+        # Rebuild IR
+        model$ir <- build_semx_ir(model$variables, model$edges, model$covariances, model$random_effects, model$parameters)
+    }
+
+    # Inject genomic group column if needed
+    if (is.null(data[["_genomic_group_"]])) {
+        uses_genomic_group <- FALSE
+        if (!is.null(model$random_effects)) {
+            for (re in model$random_effects) {
+                if (length(re$variables) > 0 && re$variables[[1]] == "_genomic_group_") {
+                    uses_genomic_group <- TRUE
+                    break
+                }
+            }
+        }
+        
+        if (uses_genomic_group) {
+             n_rows <- 0L
+             if (is.data.frame(data)) {
+                 n_rows <- nrow(data)
+             } else if (is.list(data) && length(data) > 0L) {
+                 n_rows <- length(data[[1]])
+             }
+             if (n_rows > 0L) {
+                 data[["_genomic_group_"]] <- rep(1.0, n_rows)
+             }
+        }
+    }
+    
+    # Convert character/factor columns to numeric to satisfy C++ requirements
+    # We convert to 0-based indices for C++ compatibility
+    if (is.data.frame(data)) {
+        for (col_name in names(data)) {
+            col <- data[[col_name]]
+            if (is.character(col) || is.factor(col)) {
+                data[[col_name]] <- as.numeric(as.factor(col)) - 1
+            }
         }
     }
     
@@ -481,6 +904,14 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
         }
     }
 
+    # Pass initial parameters via status map if present
+    if (!is.null(model$parameters)) {
+        for (param_name in names(model$parameters)) {
+            val <- as.numeric(model$parameters[[param_name]])
+            status_data[[param_name]] <- val
+        }
+    }
+    
     merged_fixed <- fixed_covariance_data %||% list()
     if (!is.null(model$fixed_covariance_data) && length(model$fixed_covariance_data)) {
         for (cov_id in names(model$fixed_covariance_data)) {
@@ -491,19 +922,34 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
     }
 
     result <- if (length(merged_fixed) > 0L && length(status_data) > 0L) {
-        driver$fit_with_fixed_and_status(model$ir, data, options, optimizer_name, merged_fixed, status_data)
+        driver$fit_with_fixed_and_status(model$ir, data, options, optimizer_name, merged_fixed, status_data, extra_param_mappings, method_code)
     } else if (length(merged_fixed) > 0L) {
-        driver$fit_with_fixed(model$ir, data, options, optimizer_name, merged_fixed)
+        driver$fit_with_fixed(model$ir, data, options, optimizer_name, merged_fixed, extra_param_mappings, method_code)
     } else if (length(status_data) > 0L) {
-        driver$fit_with_status(model$ir, data, options, optimizer_name, status_data)
+        driver$fit_with_status(model$ir, data, options, optimizer_name, status_data, extra_param_mappings, method_code)
     } else {
-        driver$fit(model$ir, data, options, optimizer_name)
+        driver$fit(model$ir, data, options, optimizer_name, extra_param_mappings, method_code)
+    }
+
+    opt_res <- result$optimization_result
+    opt_res_list <- list(
+        parameters = opt_res$parameters,
+        objective_value = opt_res$objective_value,
+        gradient_norm = opt_res$gradient_norm,
+        iterations = opt_res$iterations,
+        converged = opt_res$converged
+    )
+    names(opt_res_list$parameters) <- result$parameter_names
+    
+    se <- result$standard_errors
+    if (length(se) == length(result$parameter_names)) {
+        names(se) <- result$parameter_names
     }
 
     structure(
         list(
-            optimization_result = result$optimization_result,
-            standard_errors = result$standard_errors,
+            optimization_result = opt_res_list,
+            standard_errors = se,
             vcov = result$vcov,
             parameter_names = result$parameter_names,
             aic = result$aic,

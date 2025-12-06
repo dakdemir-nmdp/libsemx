@@ -12,10 +12,10 @@ OutcomeEvaluation WeibullOutcome::evaluate(double observed,
                                             double status,
                                             const std::vector<double>& /*extra_params*/) const {
     if (observed <= 0.0) {
-        throw std::invalid_argument("Weibull observed time must be positive");
+        throw std::runtime_error("Weibull observed time must be positive");
     }
     if (dispersion <= 0.0) {
-        throw std::invalid_argument("Weibull dispersion (shape) must be positive");
+        throw std::runtime_error("Weibull dispersion (shape) must be positive");
     }
     if (status != 0.0 && status != 1.0) {
         // Allow weighted status? For now, strict 0/1 or maybe just warn?

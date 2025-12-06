@@ -22,6 +22,7 @@ SOURCES = model_graph.cpp \
           lognormal_outcome.cpp \
           loglogistic_outcome.cpp \
           ordinal_outcome.cpp \
+          fixed_outcome.cpp \
           model_ir.cpp \
           optimizer.cpp \
           likelihood_driver.cpp \

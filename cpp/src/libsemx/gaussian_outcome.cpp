@@ -15,7 +15,7 @@ OutcomeEvaluation GaussianOutcome::evaluate(double observed,
                                             double /*status*/,
                                             const std::vector<double>& /*extra_params*/) const {
     if (!(dispersion > 0.0)) {
-        throw std::invalid_argument("gaussian dispersion must be positive");
+        throw std::invalid_argument("gaussian dispersion must be positive: " + std::to_string(dispersion));
     }
     const double variance = dispersion;
     const double residual = observed - linear_predictor;

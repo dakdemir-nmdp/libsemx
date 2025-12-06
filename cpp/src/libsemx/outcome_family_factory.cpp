@@ -8,6 +8,7 @@
 #include "libsemx/lognormal_outcome.hpp"
 #include "libsemx/loglogistic_outcome.hpp"
 #include "libsemx/ordinal_outcome.hpp"
+#include "libsemx/fixed_outcome.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -42,6 +43,9 @@ std::unique_ptr<OutcomeFamily> OutcomeFamilyFactory::create(const std::string& f
     }
     if (family_name == "ordinal" || family_name == "probit") {
         return std::make_unique<OrdinalOutcome>();
+    }
+    if (family_name == "fixed" || family_name == "none") {
+        return std::make_unique<FixedOutcome>();
     }
     throw std::invalid_argument("Unknown outcome family: " + family_name);
 }

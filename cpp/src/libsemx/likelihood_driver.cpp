@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <iostream>
+#include <fstream>
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/outcome_family_factory.hpp"
 #include "libsemx/covariance_structure.hpp"
@@ -26,6 +27,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <list>
 #include <memory>
 
 namespace libsemx {
@@ -47,6 +49,7 @@ struct RandomEffectInfo {
     std::vector<double> G_inverse;
     double log_det_G = 0.0;
     std::vector<std::vector<double>> G_gradients;
+    std::vector<std::string> target_vars;
 };
 
 
@@ -118,6 +121,13 @@ std::vector<RandomEffectInfo> build_random_effect_infos(
         cov_lookup.emplace(cov.id, &cov);
     }
 
+    std::unordered_map<std::string, std::vector<std::string>> re_targets;
+    for (const auto& edge : model.edges) {
+        if (edge.kind == EdgeKind::Regression) {
+            re_targets[edge.source].push_back(edge.target);
+        }
+    }
+
     std::vector<RandomEffectInfo> infos;
     infos.reserve(model.random_effects.size());
 
@@ -147,6 +157,11 @@ std::vector<RandomEffectInfo> build_random_effect_infos(
         info.covariance_id = re.covariance_id;
         info.cov_spec = cov_it->second;
         info.G_matrix = structure->materialize(params);
+        
+        auto target_it = re_targets.find(re.id);
+        if (target_it != re_targets.end()) {
+            info.target_vars = target_it->second;
+        }
 
         if (info.cov_spec->dimension == 0) {
             throw std::runtime_error("Random effect " + re.id + " has zero-dimensional covariance");
@@ -231,8 +246,35 @@ std::vector<double> build_design_matrix(
             return Z;
         }
 
+        // Fallback: If q != n_i and no design vars, check if we can infer Z from grouping variable
+        // This happens when we have repeated records (n_i > q) and the grouping variable
+        // maps observations to levels of the random effect (1..q).
+        // We assume the grouping variable values are 1-based indices or 0-based?
+        // In R, factors are 1-based integers.
+        // Let's try to use the grouping variable itself as the index.
+        try {
+             const auto& group_vals = resolve_design_values(info.grouping_var, data, linear_predictors);
+             // Check if values are within range [1, q] or [0, q-1]
+             // We'll assume 1-based if min >= 1, else 0-based?
+             // Or just check bounds.
+             
+             for (std::size_t r = 0; r < n_i; ++r) {
+                 double val = group_vals[indices[r]];
+                 long col_idx = static_cast<long>(val);
+                 
+                 if (col_idx < 0 || static_cast<std::size_t>(col_idx) >= q) {
+                     throw std::runtime_error("Index " + std::to_string(col_idx) + " out of bounds for covariance dimension " + std::to_string(q));
+                 }
+                 
+                 Z[r * q + col_idx] = 1.0;
+             }
+             return Z;
+        } catch (...) {
+             // Fall through to error
+        }
+
         throw std::runtime_error("Random effect " + info.id + " expects " + std::to_string(q) +
-                                 " design columns but none were specified");
+                                 " design columns but none were specified, and automatic inference failed.");
     }
 
     if (info.design_vars.size() != q) {
@@ -462,19 +504,23 @@ LaplaceSystem build_laplace_system(
     return system;
 }
 
+struct OutcomeData {
+    std::string name;
+    const std::vector<double>& obs;
+    const std::vector<double>& pred;
+    const std::vector<double>& disp;
+    const std::vector<double>* status;
+    const std::vector<double>& extra;
+    const OutcomeFamily* family;
+};
+
 void compute_system_grad_hess(const LaplaceSystem& system,
                               const std::vector<double>& u,
-                              const std::vector<double>& obs_data,
-                              const std::vector<double>& pred_data,
-                              const std::vector<double>& disp_data,
-                              const std::vector<double>* status_vec,
-                              const std::vector<double>& extra_vec,
-                              const OutcomeFamily& family,
+                              const std::vector<OutcomeData>& outcomes,
                               std::vector<double>& grad,
                               std::vector<double>& hess,
                               std::vector<OutcomeEvaluation>* evals_out) {
     const std::size_t Q = system.total_dim;
-    const std::size_t n = obs_data.size();
     std::fill(grad.begin(), grad.end(), 0.0);
     std::fill(hess.begin(), hess.end(), 0.0);
 
@@ -495,59 +541,80 @@ void compute_system_grad_hess(const LaplaceSystem& system,
     }
 
     if (evals_out) {
-        evals_out->resize(n);
+        evals_out->clear();
     }
 
-    for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
-        if (std::isnan(obs_data[obs_idx])) {
+    for (const auto& outcome : outcomes) {
+        std::size_t n = outcome.obs.size();
+        for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
+            if (std::isnan(outcome.obs[obs_idx])) {
+                if (evals_out) {
+                    evals_out->push_back(OutcomeEvaluation{0.0, 0.0, 0.0, 0.0, 0.0, {}});
+                }
+                continue;
+            }
+
+            double eta = outcome.pred[obs_idx];
+            const auto& entries = system.observation_entries[obs_idx];
+            
+            std::vector<const LaplaceBlock*> active_blocks;
+            std::vector<std::size_t> active_rows;
+            
+            for (const auto& entry : entries) {
+                const auto& block = system.blocks[entry.block_index];
+                bool targets = false;
+                for (const auto& t : block.info->target_vars) {
+                    if (t == outcome.name) {
+                        targets = true;
+                        break;
+                    }
+                }
+                if (targets) {
+                    active_blocks.push_back(&block);
+                    active_rows.push_back(entry.row_index);
+                    const double* z_row = &block.design_matrix[entry.row_index * block.q];
+                    const double* u_block = &u[block.offset];
+                    for (std::size_t j = 0; j < block.q; ++j) {
+                        eta += z_row[j] * u_block[j];
+                    }
+                }
+            }
+
+            const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
+            auto eval = outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra);
             if (evals_out) {
-                (*evals_out)[obs_idx] = OutcomeEvaluation{0.0, 0.0, 0.0, 0.0};
+                evals_out->push_back(eval);
             }
-            continue;
-        }
 
-        double eta = pred_data[obs_idx];
-        const auto& entries = system.observation_entries[obs_idx];
-        for (const auto& entry : entries) {
-            const auto& block = system.blocks[entry.block_index];
-            const double* z_row = &block.design_matrix[entry.row_index * block.q];
-            const double* u_block = &u[block.offset];
-            for (std::size_t j = 0; j < block.q; ++j) {
-                eta += z_row[j] * u_block[j];
+            for (std::size_t i = 0; i < active_blocks.size(); ++i) {
+                const auto* block = active_blocks[i];
+                std::size_t row = active_rows[i];
+                const double* z_row = &block->design_matrix[row * block->q];
+                double* grad_block = &grad[block->offset];
+                for (std::size_t j = 0; j < block->q; ++j) {
+                    grad_block[j] += z_row[j] * eval.first_derivative;
+                }
             }
-        }
 
-        const double s = status_vec ? (*status_vec)[obs_idx] : 1.0;
-        auto eval = family.evaluate(obs_data[obs_idx], eta, disp_data[obs_idx], s, extra_vec);
-        if (evals_out) {
-            (*evals_out)[obs_idx] = eval;
-        }
-
-        for (const auto& entry : entries) {
-            const auto& block = system.blocks[entry.block_index];
-            const double* z_row = &block.design_matrix[entry.row_index * block.q];
-            double* grad_block = &grad[block.offset];
-            for (std::size_t j = 0; j < block.q; ++j) {
-                grad_block[j] += z_row[j] * eval.first_derivative;
-            }
-        }
-
-        for (std::size_t a = 0; a < entries.size(); ++a) {
-            const auto& entry_a = entries[a];
-            const auto& block_a = system.blocks[entry_a.block_index];
-            const double* z_a = &block_a.design_matrix[entry_a.row_index * block_a.q];
-            for (std::size_t b = a; b < entries.size(); ++b) {
-                const auto& entry_b = entries[b];
-                const auto& block_b = system.blocks[entry_b.block_index];
-                const double* z_b = &block_b.design_matrix[entry_b.row_index * block_b.q];
-                for (std::size_t r = 0; r < block_a.q; ++r) {
-                    for (std::size_t c = 0; c < block_b.q; ++c) {
-                        double value = z_a[r] * z_b[c] * eval.second_derivative;
-                        const std::size_t row_idx = block_a.offset + r;
-                        const std::size_t col_idx = block_b.offset + c;
-                        hess[row_idx * Q + col_idx] += value;
-                        if (entry_b.block_index != entry_a.block_index) {
-                            hess[col_idx * Q + row_idx] += value;
+            for (std::size_t a = 0; a < active_blocks.size(); ++a) {
+                const auto* block_a = active_blocks[a];
+                std::size_t row_a = active_rows[a];
+                const double* z_a = &block_a->design_matrix[row_a * block_a->q];
+                
+                for (std::size_t b = a; b < active_blocks.size(); ++b) {
+                    const auto* block_b = active_blocks[b];
+                    std::size_t row_b = active_rows[b];
+                    const double* z_b = &block_b->design_matrix[row_b * block_b->q];
+                    
+                    for (std::size_t r = 0; r < block_a->q; ++r) {
+                        for (std::size_t c = 0; c < block_b->q; ++c) {
+                            double value = z_a[r] * z_b[c] * eval.second_derivative;
+                            const std::size_t row_idx = block_a->offset + r;
+                            const std::size_t col_idx = block_b->offset + c;
+                            hess[row_idx * Q + col_idx] += value;
+                            if (row_idx != col_idx) {
+                                hess[col_idx * Q + row_idx] += value;
+                            }
                         }
                     }
                 }
@@ -558,32 +625,38 @@ void compute_system_grad_hess(const LaplaceSystem& system,
 
 double compute_system_objective(const LaplaceSystem& system,
                                 const std::vector<double>& u,
-                                const std::vector<double>& obs_data,
-                                const std::vector<double>& pred_data,
-                                const std::vector<double>& disp_data,
-                                const std::vector<double>* status_vec,
-                                const std::vector<double>& extra_vec,
-                                const OutcomeFamily& family) {
-    const std::size_t n = obs_data.size();
+                                const std::vector<OutcomeData>& outcomes) {
     double loglik = 0.0;
 
     // 1. Log-likelihood of data given u
-    for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
-        if (std::isnan(obs_data[obs_idx])) continue;
+    for (const auto& outcome : outcomes) {
+        std::size_t n = outcome.obs.size();
+        for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
+            if (std::isnan(outcome.obs[obs_idx])) continue;
 
-        double eta = pred_data[obs_idx];
-        const auto& entries = system.observation_entries[obs_idx];
-        for (const auto& entry : entries) {
-            const auto& block = system.blocks[entry.block_index];
-            const double* z_row = &block.design_matrix[entry.row_index * block.q];
-            const double* u_block = &u[block.offset];
-            for (std::size_t j = 0; j < block.q; ++j) {
-                eta += z_row[j] * u_block[j];
+            double eta = outcome.pred[obs_idx];
+            const auto& entries = system.observation_entries[obs_idx];
+            for (const auto& entry : entries) {
+                const auto& block = system.blocks[entry.block_index];
+                bool targets = false;
+                for (const auto& t : block.info->target_vars) {
+                    if (t == outcome.name) {
+                        targets = true;
+                        break;
+                    }
+                }
+                if (!targets) continue;
+
+                const double* z_row = &block.design_matrix[entry.row_index * block.q];
+                const double* u_block = &u[block.offset];
+                for (std::size_t j = 0; j < block.q; ++j) {
+                    eta += z_row[j] * u_block[j];
+                }
             }
-        }
 
-        const double s = status_vec ? (*status_vec)[obs_idx] : 1.0;
-        loglik += family.evaluate(obs_data[obs_idx], eta, disp_data[obs_idx], s, extra_vec).log_likelihood;
+            const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
+            loglik += outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra).log_likelihood;
+        }
     }
 
     // 2. Penalty term: -0.5 * u^T * G^-1 * u
@@ -591,8 +664,6 @@ double compute_system_objective(const LaplaceSystem& system,
         const auto& info = *block.info;
         const double* G_inv = info.G_inverse.data();
         const double* u_block = &u[block.offset];
-        // u_block^T * G_inv * u_block
-        // G_inv is symmetric
         for (std::size_t r = 0; r < block.q; ++r) {
             double row_sum = 0.0;
             for (std::size_t c = 0; c < block.q; ++c) {
@@ -606,12 +677,7 @@ double compute_system_objective(const LaplaceSystem& system,
 }
 
 bool solve_laplace_system(const LaplaceSystem& system,
-                          const std::vector<double>& obs_data,
-                          const std::vector<double>& pred_data,
-                          const std::vector<double>& disp_data,
-                          const std::vector<double>* status_vec,
-                          const std::vector<double>& extra_vec,
-                          const OutcomeFamily& family,
+                          const std::vector<OutcomeData>& outcomes,
                           LaplaceSystemResult& result) {
     const std::size_t Q = system.total_dim;
     std::vector<double> u(Q, 0.0);
@@ -627,10 +693,10 @@ bool solve_laplace_system(const LaplaceSystem& system,
     constexpr double kDampingInit = 1e-3;
     constexpr double kDampingMax = 1e2;
 
-    double current_obj = compute_system_objective(system, u, obs_data, pred_data, disp_data, status_vec, extra_vec, family);
+    double current_obj = compute_system_objective(system, u, outcomes);
 
     for (int iter = 0; iter < kMaxIter; ++iter) {
-        compute_system_grad_hess(system, u, obs_data, pred_data, disp_data, status_vec, extra_vec, family, grad, hess, nullptr);
+        compute_system_grad_hess(system, u, outcomes, grad, hess, nullptr);
         
         // Prepare negative hessian
         for (std::size_t idx = 0; idx < Q * Q; ++idx) {
@@ -674,7 +740,7 @@ bool solve_laplace_system(const LaplaceSystem& system,
         bool improved = false;
         while (step > 1e-4) {
             for(size_t i=0; i<Q; ++i) u_new[i] = u[i] + step * delta[i];
-            double new_obj = compute_system_objective(system, u_new, obs_data, pred_data, disp_data, status_vec, extra_vec, family);
+            double new_obj = compute_system_objective(system, u_new, outcomes);
             
             // Simple improvement check
             if (new_obj > current_obj) {
@@ -708,7 +774,7 @@ bool solve_laplace_system(const LaplaceSystem& system,
     result.u = u;
     result.neg_hessian = std::vector<double>(Q * Q);
     result.chol_neg_hessian = std::vector<double>(Q * Q);
-    compute_system_grad_hess(system, u, obs_data, pred_data, disp_data, status_vec, extra_vec, family, grad, hess, &result.evaluations);
+    compute_system_grad_hess(system, u, outcomes, grad, hess, &result.evaluations);
     for (std::size_t idx = 0; idx < Q * Q; ++idx) {
         result.neg_hessian[idx] = -hess[idx];
     }
@@ -766,7 +832,8 @@ double compute_prior_loglik(const LaplaceSystem& system,
 }
 
 std::vector<double> compute_observation_quad_terms(const LaplaceSystem& system,
-                                                   const std::vector<double>& neg_hess_inv) {
+                                                   const std::vector<double>& neg_hess_inv,
+                                                   std::string_view target_var) {
     const std::size_t Q = system.total_dim;
     const std::size_t n = system.observation_entries.size();
     std::vector<double> buffer(Q, 0.0);
@@ -775,6 +842,16 @@ std::vector<double> compute_observation_quad_terms(const LaplaceSystem& system,
         std::fill(buffer.begin(), buffer.end(), 0.0);
         for (const auto& entry : system.observation_entries[obs_idx]) {
             const auto& block = system.blocks[entry.block_index];
+            
+            bool targets = false;
+            for (const auto& t : block.info->target_vars) {
+                if (t == target_var) {
+                    targets = true;
+                    break;
+                }
+            }
+            if (!targets) continue;
+
             const double* z_row = &block.design_matrix[entry.row_index * block.q];
             for (std::size_t j = 0; j < block.q; ++j) {
                 buffer[block.offset + j] = z_row[j];
@@ -794,13 +871,24 @@ std::vector<double> compute_observation_quad_terms(const LaplaceSystem& system,
 }
 
 std::vector<double> project_observations(const LaplaceSystem& system,
-                                         const std::vector<double>& direction) {
+                                         const std::vector<double>& direction,
+                                         std::string_view target_var) {
     const std::size_t n = system.observation_entries.size();
     std::vector<double> projected(n, 0.0);
     for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
         double sum = 0.0;
         for (const auto& entry : system.observation_entries[obs_idx]) {
             const auto& block = system.blocks[entry.block_index];
+
+            bool targets = false;
+            for (const auto& t : block.info->target_vars) {
+                if (t == target_var) {
+                    targets = true;
+                    break;
+                }
+            }
+            if (!targets) continue;
+
             const double* z_row = &block.design_matrix[entry.row_index * block.q];
             for (std::size_t j = 0; j < block.q; ++j) {
                 sum += z_row[j] * direction[block.offset + j];
@@ -946,9 +1034,13 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
     
     if (model.random_effects.empty()) {
         double total = 0.0;
+        // std::cout << "Evaluating LL..." << std::endl;
         for (const auto& var : model.variables) {
             if (var.kind != VariableKind::Observed) {
                 continue;  // Skip latent and grouping variables for now
+            }
+            if (var.family.empty() || var.family == "fixed") {
+                continue; // Skip variables without a family (treated as exogenous)
             }
             auto data_it = data.find(var.name);
             if (data_it == data.end()) {
@@ -1066,6 +1158,7 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
                 }
             }
         }
+        std::cerr << "Total LL: " << total << std::endl;
         return total;
     }
 
@@ -1075,351 +1168,89 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
         throw std::runtime_error("Random effect metadata missing");
     }
 
-    std::string obs_var_name;
-    std::string obs_family_name;
-    for (const auto& var : model.variables) {
-        if (var.kind == VariableKind::Observed) {
-            bool is_target = false;
-            for (const auto& edge : model.edges) {
-                if (edge.target == var.name) {
-                    is_target = true;
-                    break;
+    std::vector<std::string> outcome_vars;
+    std::unordered_set<std::string> outcome_set;
+    
+    for (const auto& edge : model.edges) {
+        if (edge.kind == EdgeKind::Regression) {
+            auto it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
+                return v.name == edge.target && v.kind == VariableKind::Observed;
+            });
+            if (it != model.variables.end()) {
+                if (outcome_set.find(edge.target) == outcome_set.end()) {
+                    outcome_vars.push_back(edge.target);
+                    outcome_set.insert(edge.target);
                 }
             }
-            if (is_target || obs_var_name.empty()) {
-                obs_var_name = var.name;
-                obs_family_name = var.family;
+        }
+    }
+    
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Observed && !var.family.empty()) {
+            if (outcome_set.find(var.name) == outcome_set.end()) {
+                outcome_vars.push_back(var.name);
+                outcome_set.insert(var.name);
             }
         }
     }
-    if (obs_var_name.empty()) {
-        throw std::runtime_error("No observed variable found");
+
+    if (outcome_vars.empty()) {
+        throw std::runtime_error("No outcome variables found");
     }
 
-    auto pred_it = linear_predictors.find(obs_var_name);
-    if (pred_it == linear_predictors.end()) {
-        if (linear_predictors.size() == 1) {
-            obs_var_name = linear_predictors.begin()->first;
-            auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
-                return v.name == obs_var_name;
-            });
-            if (var_it == model.variables.end()) {
-                throw std::runtime_error("Outcome variable metadata not found: " + obs_var_name);
-            }
-            obs_family_name = var_it->family;
-            pred_it = linear_predictors.begin();
-        } else {
-            throw std::runtime_error("Linear predictors for outcome variable not found");
+    std::vector<OutcomeData> outcomes;
+    std::list<std::vector<double>> disp_storage;
+    std::list<std::unique_ptr<OutcomeFamily>> family_storage;
+    std::size_t n = 0;
+    bool n_set = false;
+
+    for (const auto& name : outcome_vars) {
+        auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
+            return v.name == name;
+        });
+        if (var_it == model.variables.end()) continue;
+
+        auto data_it = data.find(name);
+        if (data_it == data.end()) throw std::runtime_error("Missing data for outcome: " + name);
+        const auto& obs_data = data_it->second;
+        
+        if (!n_set) {
+            n = obs_data.size();
+            n_set = true;
+        } else if (obs_data.size() != n) {
+            throw std::runtime_error("Mismatched data size for outcome: " + name);
         }
-    }
-    const auto& pred_data = pred_it->second;
 
-    auto obs_it = data.find(obs_var_name);
-    if (obs_it == data.end()) {
-        throw std::runtime_error("Observed variable not found in data: " + obs_var_name);
-    }
-    const auto& obs_data = obs_it->second;
+        auto pred_it = linear_predictors.find(name);
+        if (pred_it == linear_predictors.end()) throw std::runtime_error("Missing linear predictors for: " + name);
+        const auto& pred_data = pred_it->second;
 
-    if (obs_data.size() != pred_data.size()) {
-        throw std::runtime_error("Outcome data and predictors have mismatched sizes");
-    }
-    std::size_t n = obs_data.size();
+        auto disp_it = dispersions.find(name);
+        if (disp_it == dispersions.end()) throw std::runtime_error("Missing dispersions for: " + name);
+        
+        const std::vector<double>* disp_ptr = &disp_it->second;
+        if (disp_ptr->size() == 1) {
+            disp_storage.emplace_back(n, disp_ptr->front());
+            disp_ptr = &disp_storage.back();
+        } else if (disp_ptr->size() != n) {
+             throw std::runtime_error("Dispersion size mismatch");
+        }
 
-    auto disp_it = dispersions.find(obs_var_name);
-    if (disp_it == dispersions.end()) {
-        throw std::runtime_error("Dispersions not found for: " + obs_var_name);
+        family_storage.push_back(OutcomeFamilyFactory::create(var_it->family));
+        
+        const std::vector<double>* status_ptr = nullptr;
+        auto status_it = status.find(name);
+        if (status_it != status.end()) status_ptr = &status_it->second;
+
+        const std::vector<double>* extra_ptr = nullptr;
+        auto extra_it = extra_params.find(name);
+        if (extra_it != extra_params.end()) extra_ptr = &extra_it->second;
+        static const std::vector<double> empty_extra;
+
+        outcomes.push_back({name, obs_data, pred_data, *disp_ptr, status_ptr, extra_ptr ? *extra_ptr : empty_extra, family_storage.back().get()});
     }
-    const auto& disp_raw = disp_it->second;
-    if (disp_raw.empty()) {
-        throw std::runtime_error("Dispersion vector is empty");
-    }
-    std::vector<double> disp_broadcast;
-    const std::vector<double>* disp_ptr = &disp_raw;
-    if (disp_raw.size() == 1) {
-        disp_broadcast.assign(n, disp_raw.front());
-        disp_ptr = &disp_broadcast;
-    } else if (disp_raw.size() != n) {
-        throw std::runtime_error("Dispersion vector has mismatched size");
-    }
-    const auto& disp_data = *disp_ptr;
 
     const double log_2pi = std::log(2.0 * 3.14159265358979323846);
-
-    // Identify fixed effect predictors for REML adjustments
-    std::vector<std::string> fixed_effect_vars;
-    if (method == EstimationMethod::REML) {
-        for (const auto& edge : model.edges) {
-            if (edge.kind == EdgeKind::Regression && edge.target == obs_var_name) {
-                fixed_effect_vars.push_back(edge.source);
-            }
-        }
-        std::sort(fixed_effect_vars.begin(), fixed_effect_vars.end());
-    }
-
-    if (obs_family_name == "gaussian") {
-        // Check for block-diagonal optimization
-        bool can_optimize_blocks = false;
-        std::string common_grouping_var;
-        if (!random_effect_infos.empty()) {
-            can_optimize_blocks = true;
-            common_grouping_var = random_effect_infos[0].grouping_var;
-            if (common_grouping_var.empty()) {
-                 can_optimize_blocks = false;
-            } else {
-                for (size_t k = 1; k < random_effect_infos.size(); ++k) {
-                    if (random_effect_infos[k].grouping_var != common_grouping_var) {
-                        can_optimize_blocks = false;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (can_optimize_blocks) {
-            // Optimized path for block-diagonal covariance
-            auto group_map = build_group_map(random_effect_infos[0], data, n);
-            
-            // Prepare REML structures if needed
-            std::vector<double> Xt_Vinv_X;
-            std::size_t p_reml = 0;
-            if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
-                p_reml = fixed_effect_vars.size();
-                Xt_Vinv_X.assign(p_reml * p_reml, 0.0);
-            }
-
-            double total_loglik = 0.0;
-
-            for (const auto& [group_id, all_indices] : group_map) {
-                // Filter for observed data
-                std::vector<std::size_t> indices;
-                indices.reserve(all_indices.size());
-                for(auto idx : all_indices) {
-                    if (!std::isnan(obs_data[idx])) {
-                        indices.push_back(idx);
-                    }
-                }
-                
-                if (indices.empty()) continue;
-                
-                std::size_t n_i = indices.size();
-                std::vector<double> V_i(n_i * n_i, 0.0);
-                std::vector<double> resid_i(n_i);
-                
-                // Initialize V_i with dispersion and resid_i
-                for (std::size_t r = 0; r < n_i; ++r) {
-                    std::size_t idx = indices[r];
-                    resid_i[r] = obs_data[idx] - pred_data[idx];
-                    V_i[r * n_i + r] = disp_data[idx];
-                }
-                
-                // Add random effects
-                for (const auto& info : random_effect_infos) {
-                    auto Z_i_full = build_design_matrix(info, indices, data, linear_predictors);
-                    std::size_t q = info.cov_spec->dimension;
-                    
-                    // Z_i_full is n_i x q
-                    // Compute Z G Z^T
-                    Eigen::Map<const RowMajorMatrix> Z_map(Z_i_full.data(), n_i, q);
-                    Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
-                    Eigen::Map<RowMajorMatrix> V_map(V_i.data(), n_i, n_i);
-                    V_map += Z_map * G_map * Z_map.transpose();
-                }                
-                // Factorize V_i
-                std::vector<double> L_i(n_i * n_i);
-                cholesky(n_i, V_i, L_i);
-                double log_det_i = log_det_cholesky(n_i, L_i);
-                std::vector<double> alpha_i = solve_cholesky(n_i, L_i, resid_i);
-                std::vector<double> V_inv_i = invert_from_cholesky(n_i, L_i);
-                
-                double quad_form_i = 0.0;
-                for (std::size_t k = 0; k < n_i; ++k) {
-                    quad_form_i += resid_i[k] * alpha_i[k];
-                }
-                
-                total_loglik -= 0.5 * (n_i * log_2pi + log_det_i + quad_form_i);
-                
-                // REML Accumulation
-                if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
-                    std::vector<double> X_i(n_i * p_reml);
-                    for (std::size_t j = 0; j < p_reml; ++j) {
-                        const auto& vec = data.at(fixed_effect_vars[j]);
-                        for (std::size_t r = 0; r < n_i; ++r) {
-                            X_i[r * p_reml + j] = vec[indices[r]];
-                        }
-                    }
-                    
-                    std::vector<double> Vinv_X_i(n_i * p_reml, 0.0);
-                    for (std::size_t c = 0; c < p_reml; ++c) {
-                        for (std::size_t r = 0; r < n_i; ++r) {
-                            double sum = 0.0;
-                            for (std::size_t k = 0; k < n_i; ++k) {
-                                sum += V_inv_i[r * n_i + k] * X_i[k * p_reml + c];
-                            }
-                            Vinv_X_i[r * p_reml + c] = sum;
-                        }
-                    }
-                    
-                    for (std::size_t r = 0; r < p_reml; ++r) {
-                        for (std::size_t c = 0; c < p_reml; ++c) {
-                            double sum = 0.0;
-                            for (std::size_t k = 0; k < n_i; ++k) {
-                                sum += X_i[k * p_reml + r] * Vinv_X_i[k * p_reml + c];
-                            }
-                            Xt_Vinv_X[r * p_reml + c] += sum;
-                        }
-                    }
-                }
-            }
-            
-            // Finalize REML
-            if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
-                std::vector<double> L_reml(p_reml * p_reml);
-                try {
-                    cholesky(p_reml, Xt_Vinv_X, L_reml);
-                    double log_det_reml = log_det_cholesky(p_reml, L_reml);
-                    total_loglik -= 0.5 * log_det_reml;
-                    total_loglik += 0.5 * static_cast<double>(p_reml) * log_2pi;
-                } catch (...) {
-                    return -std::numeric_limits<double>::infinity();
-                }
-            }
-            
-            return total_loglik;
-        }
-
-        std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
-        group_maps.reserve(random_effect_infos.size());
-        for (const auto& info : random_effect_infos) {
-            group_maps.push_back(build_group_map(info, data, n));
-        }
-
-        std::vector<double> V_full(n * n, 0.0);
-        for (std::size_t i = 0; i < n; ++i) {
-            V_full[i * n + i] = disp_data[i];
-        }
-
-        for (std::size_t re_idx = 0; re_idx < random_effect_infos.size(); ++re_idx) {
-            const auto& info = random_effect_infos[re_idx];
-            const auto& groups = group_maps[re_idx];
-            for (const auto& [_, indices] : groups) {
-                auto Z_i = build_design_matrix(info, indices, data, linear_predictors);
-                std::size_t n_i = indices.size();
-                std::size_t q = info.cov_spec->dimension;
-
-                std::vector<double> ZG(n_i * q, 0.0);
-                for (std::size_t r = 0; r < n_i; ++r) {
-                    for (std::size_t c = 0; c < q; ++c) {
-                        double sum = 0.0;
-                        for (std::size_t k = 0; k < q; ++k) {
-                            sum += Z_i[r * q + k] * info.G_matrix[k * q + c];
-                        }
-                        ZG[r * q + c] = sum;
-                    }
-                }
-
-                for (std::size_t r = 0; r < n_i; ++r) {
-                    for (std::size_t c = 0; c < n_i; ++c) {
-                        double sum = 0.0;
-                        for (std::size_t k = 0; k < q; ++k) {
-                            sum += ZG[r * q + k] * Z_i[c * q + k];
-                        }
-                        V_full[indices[r] * n + indices[c]] += sum;
-                    }
-                }
-            }
-        }
-
-        // Handle missing data by subsetting
-        std::vector<std::size_t> observed_indices;
-        observed_indices.reserve(n);
-        for (std::size_t i = 0; i < n; ++i) {
-            if (!std::isnan(obs_data[i])) {
-                observed_indices.push_back(i);
-            }
-        }
-        std::size_t n_obs = observed_indices.size();
-
-        std::vector<double> V_sub(n_obs * n_obs);
-        std::vector<double> resid_sub(n_obs);
-        for (std::size_t r = 0; r < n_obs; ++r) {
-            resid_sub[r] = obs_data[observed_indices[r]] - pred_data[observed_indices[r]];
-            for (std::size_t c = 0; c < n_obs; ++c) {
-                V_sub[r * n_obs + c] = V_full[observed_indices[r] * n + observed_indices[c]];
-            }
-        }
-
-        std::vector<double> L(n_obs * n_obs);
-        cholesky(n_obs, V_sub, L);
-        double log_det = log_det_cholesky(n_obs, L);
-        std::vector<double> alpha = solve_cholesky(n_obs, L, resid_sub);
-
-        double quad_form = 0.0;
-        for (std::size_t i = 0; i < n_obs; ++i) {
-            quad_form += resid_sub[i] * alpha[i];
-        }
-
-        double total_loglik = -0.5 * (n_obs * log_2pi + log_det + quad_form);
-
-        if (method == EstimationMethod::REML && !fixed_effect_vars.empty()) {
-            std::vector<double> V_inv = invert_from_cholesky(n_obs, L);
-            std::size_t p = fixed_effect_vars.size();
-            std::vector<double> X_sub(n_obs * p);
-            for (std::size_t j = 0; j < p; ++j) {
-                auto it = data.find(fixed_effect_vars[j]);
-                if (it == data.end() || it->second.size() != n) {
-                    throw std::runtime_error("Missing data for fixed effect: " + fixed_effect_vars[j]);
-                }
-                for (std::size_t i = 0; i < n_obs; ++i) {
-                    X_sub[i * p + j] = it->second[observed_indices[i]];
-                }
-            }
-
-            std::vector<double> Vinv_X(n_obs * p, 0.0);
-            for (std::size_t col = 0; col < p; ++col) {
-                for (std::size_t row = 0; row < n_obs; ++row) {
-                    double sum = 0.0;
-                    for (std::size_t k = 0; k < n_obs; ++k) {
-                        sum += V_inv[row * n_obs + k] * X_sub[k * p + col];
-                    }
-                    Vinv_X[row * p + col] = sum;
-                }
-            }
-
-            std::vector<double> Xt_Vinv_X(p * p, 0.0);
-            for (std::size_t r = 0; r < p; ++r) {
-                for (std::size_t c = 0; c < p; ++c) {
-                    double sum = 0.0;
-                    for (std::size_t row = 0; row < n_obs; ++row) {
-                        sum += X_sub[row * p + r] * Vinv_X[row * p + c];
-                    }
-                    Xt_Vinv_X[r * p + c] = sum;
-                }
-            }
-
-            std::vector<double> L_reml(p * p);
-            cholesky(p, Xt_Vinv_X, L_reml);
-            double log_det_reml = log_det_cholesky(p, L_reml);
-            total_loglik -= 0.5 * log_det_reml;
-            total_loglik += 0.5 * static_cast<double>(p) * log_2pi;
-        }
-
-        return total_loglik;
-    }
-
-    if (random_effect_infos.empty()) {
-        throw std::runtime_error("Random effect metadata missing");
-    }
-
-    auto outcome_family = OutcomeFamilyFactory::create(obs_family_name);
-    auto status_it = status.find(obs_var_name);
-    const std::vector<double>* status_vec = nullptr;
-    if (status_it != status.end()) {
-        if (status_it->second.size() != n) {
-            throw std::runtime_error("Status vector has mismatched size");
-        }
-        status_vec = &status_it->second;
-    }
-    const auto& extra_vec = get_extra_params_for_variable(extra_params, obs_var_name);
 
     LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, laplace_cache_);
     if (system.total_dim == 0) {
@@ -1427,14 +1258,7 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
     }
 
     LaplaceSystemResult laplace_result;
-    if (!solve_laplace_system(system,
-                              obs_data,
-                              pred_data,
-                              disp_data,
-                              status_vec,
-                              extra_vec,
-                              *outcome_family,
-                              laplace_result)) {
+    if (!solve_laplace_system(system, outcomes, laplace_result)) {
         return -std::numeric_limits<double>::infinity();
     }
 
@@ -1458,7 +1282,8 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
                                                 EstimationMethod method,
                                                 const std::unordered_map<std::string, DataParamMapping>& data_param_mappings,
-                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings) const {
+                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
+                                                const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
     std::unordered_map<std::string, double> gradients;
     (void)method;
 
@@ -1477,6 +1302,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
 
         for (const auto& var : model.variables) {
             if (var.kind != VariableKind::Observed) continue;
+            if (var.family.empty() || var.family == "fixed") continue;
 
             auto data_it = data.find(var.name);
             auto pred_it = linear_predictors.find(var.name);
@@ -1517,6 +1343,11 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                 disp_param_id = dispersion_params.at(var.name);
             }
 
+            const std::vector<std::string>* extra_mapping_vec = nullptr;
+            if (extra_param_mappings.count(var.name)) {
+                extra_mapping_vec = &extra_param_mappings.at(var.name);
+            }
+
             for (size_t i = 0; i < obs.size(); ++i) {
                 if (std::isnan(obs[i])) {
                     continue;
@@ -1540,6 +1371,17 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
 
                 if (!disp_param_id.empty()) {
                     gradients[disp_param_id] += eval.d_dispersion;
+                }
+
+                if (extra_mapping_vec && !eval.d_extra_params.empty()) {
+                    for (size_t k = 0; k < eval.d_extra_params.size(); ++k) {
+                        if (k < extra_mapping_vec->size()) {
+                            const std::string& param_id = (*extra_mapping_vec)[k];
+                            if (!param_id.empty()) {
+                                gradients[param_id] += eval.d_extra_params[k];
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1828,13 +1670,11 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
         }
 
         LaplaceSystemResult laplace_result;
+        std::vector<OutcomeData> outcomes;
+        outcomes.push_back({obs_var_name, obs_data, pred_data, disp_data, status_vec, extra_vec, outcome_family.get()});
+
         if (!solve_laplace_system(system,
-                                  obs_data,
-                                  pred_data,
-                                  disp_data,
-                                  status_vec,
-                                  extra_vec,
-                                  *outcome_family,
+                                  outcomes,
                                   laplace_result)) {
             throw std::runtime_error("Laplace mode failed to converge for gradient computation");
         }
@@ -1856,7 +1696,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
         }
 
         std::vector<double> neg_hess_inv = invert_from_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
-        auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv);
+        auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, obs_var_name);
         std::vector<double> forcing(system.total_dim, 0.0);
 
         for (const auto& edge : model.edges) {
@@ -1875,7 +1715,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
             }
             accumulate_weighted_forcing(system, weights, forcing);
             auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
-            auto z_dot_du = project_observations(system, du);
+            auto z_dot_du = project_observations(system, du, obs_var_name);
 
             double accum = 0.0;
             for (std::size_t i = 0; i < n; ++i) {
@@ -1929,7 +1769,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                     forcing[block.offset + j] = block_forcing[j];
                 }
                 auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
-                auto z_dot_du = project_observations(system, du);
+                auto z_dot_du = project_observations(system, du, obs_var_name);
 
                 double logdet_adjust = 0.0;
                 for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
@@ -1965,7 +1805,13 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
     EstimationMethod method,
     const std::unordered_map<std::string, DataParamMapping>& data_param_mappings,
-    const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings) const {
+    const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
+    const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
+
+    {
+        std::ofstream debug_log("data/debug_semx_driver_entry.log", std::ios::app);
+        debug_log << "Driver entry. extra_param_mappings size: " << extra_param_mappings.size() << std::endl;
+    }
 
     std::unordered_map<std::string, double> gradients;
     double total_loglik = 0.0;
@@ -1985,6 +1831,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
 
         for (const auto& var : model.variables) {
             if (var.kind != VariableKind::Observed) continue;
+            if (var.family.empty()) continue;
 
             auto data_it = data.find(var.name);
             auto pred_it = linear_predictors.find(var.name);
@@ -2094,6 +1941,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 }
             }
         }
+        std::cerr << "Total LL (Grad): " << total_loglik << std::endl;
         return {total_loglik, gradients};
     }
 
@@ -2103,8 +1951,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         throw std::runtime_error("Random effect metadata missing");
     }
 
-    std::string obs_var_name;
-    std::string obs_family_name;
+    std::vector<std::string> all_outcome_vars;
     for (const auto& var : model.variables) {
         if (var.kind == VariableKind::Observed) {
             bool is_target = false;
@@ -2114,9 +1961,30 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                     break;
                 }
             }
-            if (is_target || obs_var_name.empty()) {
+            if (is_target) {
+                all_outcome_vars.push_back(var.name);
+            }
+        }
+    }
+
+    {
+        std::ofstream debug_log("data/debug_semx_driver_vars.log", std::ios::app);
+        debug_log << "all_outcome_vars size: " << all_outcome_vars.size() << std::endl;
+        for(const auto& v : all_outcome_vars) debug_log << "  " << v << std::endl;
+    }
+
+    std::string obs_var_name;
+    std::string obs_family_name;
+    if (!all_outcome_vars.empty()) {
+        obs_var_name = all_outcome_vars[0];
+        auto it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v){ return v.name == obs_var_name; });
+        obs_family_name = it->family;
+    } else {
+        for (const auto& var : model.variables) {
+            if (var.kind == VariableKind::Observed) {
                 obs_var_name = var.name;
                 obs_family_name = var.family;
+                break;
             }
         }
     }
@@ -2184,7 +2052,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         std::sort(fixed_effect_vars.begin(), fixed_effect_vars.end());
     }
 
-    if (obs_family_name == "gaussian") {
+    if (obs_family_name == "gaussian" && all_outcome_vars.size() <= 1) {
         // Check for block-diagonal optimization
         bool can_optimize_blocks = false;
         std::string common_grouping_var;
@@ -2670,30 +2538,49 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         return {total_loglik, gradients};
     }
 
-    auto outcome_family = OutcomeFamilyFactory::create(obs_family_name);
-    auto status_it = status.find(obs_var_name);
-    const std::vector<double>* status_vec = nullptr;
-    if (status_it != status.end()) {
-        if (status_it->second.size() != n) {
-            throw std::runtime_error("Status vector has mismatched size");
-        }
-        status_vec = &status_it->second;
-    }
-    const auto& extra_vec = get_extra_params_for_variable(extra_params, obs_var_name);
-
     LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, laplace_cache_);
     if (system.total_dim == 0) {
         throw std::runtime_error("Laplace system constructed without latent dimensions");
     }
 
+    std::vector<std::string> target_outcomes = all_outcome_vars;
+    if (target_outcomes.empty()) {
+        target_outcomes.push_back(obs_var_name);
+    }
+
+    std::vector<std::unique_ptr<OutcomeFamily>> families;
+    std::vector<OutcomeData> outcomes;
+    std::vector<std::vector<double>> broadcasted_dispersions;
+    broadcasted_dispersions.reserve(target_outcomes.size());
+
+    for(const auto& name : target_outcomes) {
+        auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v){ return v.name == name; });
+        auto fam = OutcomeFamilyFactory::create(var_it->family);
+        
+        const auto& obs_vec = data.at(name);
+        const auto& pred_vec = linear_predictors.at(name);
+        const auto& disp_vec = dispersions.at(name);
+        
+        if (obs_vec.size() != n) throw std::runtime_error("Mismatched observation count for " + name);
+
+        const std::vector<double>* s_vec = nullptr;
+        if (status.count(name)) s_vec = &status.at(name);
+        
+        const auto& ex_vec = get_extra_params_for_variable(extra_params, name);
+        
+        const std::vector<double>* p_disp = &disp_vec;
+        if (disp_vec.size() == 1 && n > 1) {
+            broadcasted_dispersions.emplace_back(n, disp_vec[0]);
+            p_disp = &broadcasted_dispersions.back();
+        }
+        
+        families.push_back(std::move(fam));
+        outcomes.push_back({name, obs_vec, pred_vec, *p_disp, s_vec, ex_vec, families.back().get()});
+    }
+
     LaplaceSystemResult laplace_result;
     if (!solve_laplace_system(system,
-                              obs_data,
-                              pred_data,
-                              disp_data,
-                              status_vec,
-                              extra_vec,
-                              *outcome_family,
+                              outcomes,
                               laplace_result)) {
         return { -std::numeric_limits<double>::infinity(), gradients };
     }
@@ -2706,51 +2593,59 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     double log_det_neg_hess = log_det_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
     total_loglik = log_prior + log_lik_data + 0.5 * system.total_dim * log_2pi - 0.5 * log_det_neg_hess;
 
-    if (!dispersion_param_mappings.empty()) {
-        auto map_it = dispersion_param_mappings.find(obs_var_name);
-        if (map_it != dispersion_param_mappings.end()) {
-            const auto& mapping = map_it->second;
-            for (std::size_t i = 0; i < n; ++i) {
-                size_t idx = i % mapping.stride;
-                if (idx < mapping.pattern.size()) {
-                    const std::string& pid = mapping.pattern[idx];
-                    if (!pid.empty()) {
-                        gradients[pid] += laplace_result.evaluations[i].d_dispersion;
+    std::vector<double> neg_hess_inv = invert_from_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
+    std::vector<double> forcing(system.total_dim, 0.0);
+
+    std::size_t eval_offset = 0;
+    for(size_t k=0; k<outcomes.size(); ++k) {
+        const auto& outcome = outcomes[k];
+        std::size_t n_outcome = outcome.obs.size();
+        
+        auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
+
+        if (!dispersion_param_mappings.empty()) {
+            auto map_it = dispersion_param_mappings.find(outcome.name);
+            if (map_it != dispersion_param_mappings.end()) {
+                const auto& mapping = map_it->second;
+                for (std::size_t i = 0; i < n_outcome; ++i) {
+                    size_t idx = i % mapping.stride;
+                    if (idx < mapping.pattern.size()) {
+                        const std::string& pid = mapping.pattern[idx];
+                        if (!pid.empty()) {
+                            gradients[pid] += laplace_result.evaluations[eval_offset + i].d_dispersion;
+                        }
                     }
                 }
             }
         }
-    }
 
-    std::vector<double> neg_hess_inv = invert_from_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
-    auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv);
-    std::vector<double> forcing(system.total_dim, 0.0);
+        for (const auto& edge : model.edges) {
+            if (edge.kind != EdgeKind::Regression || edge.target != outcome.name || edge.parameter_id.empty()) {
+                continue;
+            }
+            auto src_it = data.find(edge.source);
+            if (src_it == data.end() || src_it->second.size() != n_outcome) {
+                continue;
+            }
 
-    for (const auto& edge : model.edges) {
-        if (edge.kind != EdgeKind::Regression || edge.target != obs_var_name || edge.parameter_id.empty()) {
-            continue;
-        }
-        auto src_it = data.find(edge.source);
-        if (src_it == data.end() || src_it->second.size() != n) {
-            continue;
-        }
+            const auto& src_vec = src_it->second;
+            std::vector<double> weights(n_outcome, 0.0);
+            for (std::size_t i = 0; i < n_outcome; ++i) {
+                weights[i] = laplace_result.evaluations[eval_offset + i].second_derivative * src_vec[i];
+            }
+            accumulate_weighted_forcing(system, weights, forcing);
+            auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            auto z_dot_du = project_observations(system, du, outcome.name);
 
-        const auto& src_vec = src_it->second;
-        std::vector<double> weights(n, 0.0);
-        for (std::size_t i = 0; i < n; ++i) {
-            weights[i] = laplace_result.evaluations[i].second_derivative * src_vec[i];
+            double accum = 0.0;
+            for (std::size_t i = 0; i < n_outcome; ++i) {
+                const auto& eval = laplace_result.evaluations[eval_offset + i];
+                double logdet_adjust = src_vec[i] + z_dot_du[i];
+                accum += src_vec[i] * eval.first_derivative + 0.5 * eval.third_derivative * logdet_adjust * quad_terms[i];
+            }
+            gradients[edge.parameter_id] += accum;
         }
-        accumulate_weighted_forcing(system, weights, forcing);
-        auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
-        auto z_dot_du = project_observations(system, du);
-
-        double accum = 0.0;
-        for (std::size_t i = 0; i < n; ++i) {
-            const auto& eval = laplace_result.evaluations[i];
-            double logdet_adjust = src_vec[i] + z_dot_du[i];
-            accum += src_vec[i] * eval.first_derivative + 0.5 * eval.third_derivative * logdet_adjust * quad_terms[i];
-        }
-        gradients[edge.parameter_id] += accum;
+        eval_offset += n_outcome;
     }
 
     struct CovarianceDerivativeCache {
@@ -2796,11 +2691,19 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 forcing[block.offset + j] = block_forcing[j];
             }
             auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
-            auto z_dot_du = project_observations(system, du);
-
-            double logdet_adjust = 0.0;
-            for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
-                logdet_adjust += 0.5 * laplace_result.evaluations[obs_idx].third_derivative * z_dot_du[obs_idx] * quad_terms[obs_idx];
+            
+            double logdet_adjust_total = 0.0;
+            std::size_t eval_offset_cov = 0;
+            for(size_t k=0; k<outcomes.size(); ++k) {
+                const auto& outcome = outcomes[k];
+                std::size_t n_outcome = outcome.obs.size();
+                auto z_dot_du = project_observations(system, du, outcome.name);
+                auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
+                
+                for (std::size_t obs_idx = 0; obs_idx < n_outcome; ++obs_idx) {
+                    logdet_adjust_total += 0.5 * laplace_result.evaluations[eval_offset_cov + obs_idx].third_derivative * z_dot_du[obs_idx] * quad_terms[obs_idx];
+                }
+                eval_offset_cov += n_outcome;
             }
 
             double prior_term = 0.5 * quadratic_form(u_block, cache.Ginv_dG_Ginv, block.q) - 0.5 * cache.trace_Ginv_dG;
@@ -2812,9 +2715,52 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                     trace_term += neg_hess_inv[row_idx * Q + col_idx] * cache.Ginv_dG_Ginv[c * block.q + r];
                 }
             }
-            double logdet_term = 0.5 * trace_term + logdet_adjust;
+            double logdet_term = 0.5 * trace_term + logdet_adjust_total;
             gradients[cache.param_name] += prior_term + logdet_term;
         }
+    }
+
+    // Gradients for extra parameters (thresholds)
+    if (!extra_param_mappings.empty()) {
+        std::ofstream debug_log("data/debug_semx_driver.log", std::ios::app);
+        debug_log << "Processing extra param mappings for " << extra_param_mappings.size() << " variables." << std::endl;
+        
+        std::size_t eval_offset_extra = 0;
+        for (const auto& outcome : outcomes) {
+            std::size_t n_outcome = outcome.obs.size();
+            auto map_it = extra_param_mappings.find(outcome.name);
+            
+            if (map_it != extra_param_mappings.end()) {
+                const auto& param_ids = map_it->second;
+                debug_log << "  Outcome " << outcome.name << " has " << param_ids.size() << " extra params." << std::endl;
+                
+                // We need quad_terms
+                auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
+                
+                for (std::size_t i = 0; i < n_outcome; ++i) {
+                    const auto& eval = laplace_result.evaluations[eval_offset_extra + i];
+                    if (eval.d_extra_params.empty()) continue;
+                    
+                    for (std::size_t k = 0; k < param_ids.size(); ++k) {
+                        const std::string& pid = param_ids[k];
+                        if (pid.empty()) continue;
+                        
+                        double val = 0.0;
+                        if (k < eval.d_extra_params.size()) {
+                            val += eval.d_extra_params[k];
+                        }
+                        if (k < eval.d_hessian_d_extra_params.size()) {
+                            val += 0.5 * eval.d_hessian_d_extra_params[k] * quad_terms[i];
+                        }
+                        gradients[pid] += val;
+                    }
+                }
+            }
+            eval_offset_extra += n_outcome;
+        }
+    } else {
+         std::ofstream debug_log("data/debug_semx_driver.log", std::ios::app);
+         debug_log << "extra_param_mappings is empty!" << std::endl;
     }
 
     return {total_loglik, gradients};
@@ -2841,6 +2787,7 @@ std::unordered_map<std::string, std::vector<double>> LikelihoodDriver::compute_r
     std::string obs_family_name;
     for (const auto& var : model.variables) {
         if (var.kind == VariableKind::Observed) {
+            if (var.family.empty()) continue;
             bool is_target = false;
             for (const auto& edge : model.edges) {
                 if (edge.target == var.name) {
@@ -2910,7 +2857,10 @@ std::unordered_map<std::string, std::vector<double>> LikelihoodDriver::compute_r
     if (extra_params.count(obs_var_name)) extra_vec = &extra_params.at(obs_var_name);
     const std::vector<double>& ep = extra_vec ? *extra_vec : std::vector<double>{};
 
-    if (!solve_laplace_system(system, obs_data, pred_data, disp_data, status_vec, ep, *outcome_family, laplace_result)) {
+    std::vector<OutcomeData> outcomes;
+    outcomes.push_back({obs_var_name, obs_data, pred_data, disp_data, status_vec, ep, outcome_family.get()});
+
+    if (!solve_laplace_system(system, outcomes, laplace_result)) {
         return random_effects;
     }
 
@@ -2957,7 +2907,13 @@ Eigen::MatrixXd compute_hessian(const ObjectiveFunction& objective, const std::v
         x[j] = original_val; // Restore
         
         for (size_t i = 0; i < n; ++i) {
-            hessian(i, j) = (grad_plus[i] - grad_minus[i]) / (2.0 * epsilon);
+            double val = (grad_plus[i] - grad_minus[i]) / (2.0 * epsilon);
+            if (std::isnan(val)) {
+                std::cout << "NaN in Hessian at (" << i << "," << j << ")" << std::endl;
+                std::cout << "grad_plus[" << i << "] = " << grad_plus[i] << std::endl;
+                std::cout << "grad_minus[" << i << "] = " << grad_minus[i] << std::endl;
+            }
+            hessian(i, j) = val;
         }
     }
     
@@ -2974,9 +2930,10 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
                                          const std::string& optimizer_name,
                                          const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
                                          const std::unordered_map<std::string, std::vector<double>>& status,
-                                         EstimationMethod method) const {
+                                         EstimationMethod method,
+                                         const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
     
-    ModelObjective objective(*this, model, data, fixed_covariance_data, status, method);
+    ModelObjective objective(*this, model, data, fixed_covariance_data, status, method, extra_param_mappings);
     auto initial_params = objective.initial_parameters();
     
     std::unique_ptr<Optimizer> optimizer;
@@ -3041,7 +2998,16 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
 
     if (result.converged) {
         try {
+            std::cerr << "Computing Hessian..." << std::endl;
             Eigen::MatrixXd hessian = compute_hessian(objective, result.parameters);
+            std::cerr << "Hessian:\n" << hessian << std::endl;
+            
+            std::ofstream debug_file("hessian_debug.txt");
+            if (debug_file.is_open()) {
+                debug_file << "Hessian:\n" << hessian << std::endl;
+                debug_file.close();
+            }
+
             // Hessian of NLL is Fisher Information. Covariance is Inverse.
             Eigen::MatrixXd vcov_unconstrained = hessian.inverse();
             

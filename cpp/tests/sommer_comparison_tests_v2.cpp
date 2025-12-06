@@ -96,8 +96,15 @@ std::vector<double> flatten_matrix_v2(const std::vector<std::vector<double>>& K)
 }
 
 TEST_CASE("Compare GBLUP with sommer V2", "[comparison][sommer][gblup_v2]") {
-    SommerData data = load_sommer_data_v2("data/sommer_gxe.csv");
-    auto K_rows = load_K_matrix_v2("data/sommer_K.csv");
+    std::string data_path = "data/sommer_gxe.csv";
+    std::ifstream check(data_path);
+    if (!check.good()) data_path = "../data/sommer_gxe.csv";
+    SommerData data = load_sommer_data_v2(data_path);
+
+    std::string k_path = "data/sommer_K.csv";
+    std::ifstream check_k(k_path);
+    if (!check_k.good()) k_path = "../data/sommer_K.csv";
+    auto K_rows = load_K_matrix_v2(k_path);
     auto K_flat = flatten_matrix_v2(K_rows);
     
     double k_diag_sum = 0.0;
@@ -194,8 +201,15 @@ TEST_CASE("Compare GBLUP with sommer V2", "[comparison][sommer][gblup_v2]") {
 }
 
 TEST_CASE("Compare GxE with sommer V2", "[comparison][sommer][gxe_v2]") {
-    SommerData data = load_sommer_data_v2("data/sommer_gxe.csv");
-    auto K_rows = load_K_matrix_v2("data/sommer_K.csv");
+    std::string data_path = "data/sommer_gxe.csv";
+    std::ifstream check(data_path);
+    if (!check.good()) data_path = "../data/sommer_gxe.csv";
+    SommerData data = load_sommer_data_v2(data_path);
+
+    std::string k_path = "data/sommer_K.csv";
+    std::ifstream check_k(k_path);
+    if (!check_k.good()) k_path = "../data/sommer_K.csv";
+    auto K_rows = load_K_matrix_v2(k_path);
     auto K_flat = flatten_matrix_v2(K_rows);
     
     ModelIRBuilder builder;

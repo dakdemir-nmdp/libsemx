@@ -11,7 +11,7 @@
 
 
 
-<title>Comparison: libsemx vs lme4/lavaan</title>
+<title>MDP Genomic Analysis with semx</title>
 
 <script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
 // be compatible with the behavior of Pandoc < 2.8).
@@ -348,551 +348,116 @@ display: none;
 
 
 
-<h1 class="title toc-ignore">Comparison: libsemx vs lme4/lavaan</h1>
+<h1 class="title toc-ignore">MDP Genomic Analysis with semx</h1>
 
 </div>
 
 
-<div id="introduction" class="section level2">
-<h2>Introduction</h2>
-<p>This document compares <code>libsemx</code> with <code>lme4</code>
-for a Linear Mixed Model (LMM) using the <code>sleepstudy</code>
-dataset, and with <code>lavaan</code> for a CFA model.</p>
+<div id="load-and-preprocess-data" class="section level2">
+<h2>1. Load and Preprocess Data</h2>
+<p>We load the numeric SNP data and phenotype data.</p>
+<pre class="r"><code># Adjust paths as needed
+numeric_df &lt;- read_csv(&quot;../../data/mdp_numeric.csv&quot;, show_col_types = FALSE)
+traits_df &lt;- read_csv(&quot;../../data/mdp_traits.csv&quot;, show_col_types = FALSE)
+
+cat(&quot;Numeric DF dim:&quot;, dim(numeric_df), &quot;\n&quot;)</code></pre>
+<pre><code>## Numeric DF dim: 281 3094</code></pre>
+<pre class="r"><code>cat(&quot;Traits DF dim:&quot;, dim(traits_df), &quot;\n&quot;)</code></pre>
+<pre><code>## Traits DF dim: 301 4</code></pre>
+<pre class="r"><code># Rename Taxa to taxa in traits_df for consistency
+traits_df &lt;- traits_df %&gt;% rename(taxa = Taxa)
+
+# Ensure taxa is character
+numeric_df$taxa &lt;- as.character(numeric_df$taxa)
+traits_df$taxa &lt;- as.character(traits_df$taxa)
+
+# Merge datasets
+merged_df &lt;- inner_join(numeric_df, traits_df, by = &quot;taxa&quot;)
+
+# Drop rows with missing EarHT
+merged_df &lt;- merged_df %&gt;% filter(!is.na(EarHT))
+
+cat(&quot;Merged DF dim:&quot;, dim(merged_df), &quot;\n&quot;)</code></pre>
+<pre><code>## Merged DF dim: 279 3097</code></pre>
+<pre class="r"><code># Sort by taxa
+merged_df &lt;- merged_df %&gt;% arrange(taxa)
+
+# Extract Markers
+# Identify marker columns (all except taxa and traits)
+trait_cols &lt;- c(&quot;taxa&quot;, &quot;EarHT&quot;, &quot;dpoll&quot;, &quot;EarDia&quot;)
+marker_cols &lt;- setdiff(names(numeric_df), &quot;taxa&quot;)
+
+M &lt;- as.matrix(merged_df[, marker_cols])
+cat(&quot;Marker Matrix dim:&quot;, dim(M), &quot;\n&quot;)</code></pre>
+<pre><code>## Marker Matrix dim: 279 3093</code></pre>
+<pre class="r"><code># Standardize Phenotype
+merged_df$EarHT_std &lt;- scale(merged_df$EarHT)
+
+# Convert taxa to numeric factor for semx
+# semx currently requires all data columns passed to fit() to be numeric.
+# We convert the grouping variable &#39;taxa&#39; to integer codes.
+merged_df$taxa &lt;- as.numeric(as.factor(merged_df$taxa))
+
+# Add a dummy grouping variable for GBLUP (single group)
+merged_df$all_groups &lt;- 1</code></pre>
 </div>
-<div id="part-1-linear-mixed-model-glmm" class="section level2">
-<h2>Part 1: Linear Mixed Model (GLMM)</h2>
-<p>We fit a random slope model:
-<code>Reaction ~ Days + (1 + Days | Subject)</code>.</p>
-<div id="lme4-implementation" class="section level3">
-<h3>1.1 lme4 Implementation</h3>
-<pre class="r"><code>data(sleepstudy, package = &quot;lme4&quot;)
-fm1 &lt;- lmer(Reaction ~ Days + (Days | Subject), sleepstudy, REML = FALSE) # Use ML for comparison
-summary(fm1)</code></pre>
-<pre><code>## Linear mixed model fit by maximum likelihood  [&#39;lmerMod&#39;]
-## Formula: Reaction ~ Days + (Days | Subject)
-##    Data: sleepstudy
-## 
-##      AIC      BIC   logLik deviance df.resid 
-##   1763.9   1783.1   -876.0   1751.9      174 
-## 
-## Scaled residuals: 
-##     Min      1Q  Median      3Q     Max 
-## -3.9416 -0.4656  0.0289  0.4636  5.1793 
-## 
-## Random effects:
-##  Groups   Name        Variance Std.Dev. Corr
-##  Subject  (Intercept) 565.48   23.780       
-##           Days         32.68    5.717   0.08
-##  Residual             654.95   25.592       
-## Number of obs: 180, groups:  Subject, 18
-## 
-## Fixed effects:
-##             Estimate Std. Error t value
-## (Intercept)  251.405      6.632  37.907
-## Days          10.467      1.502   6.968
-## 
-## Correlation of Fixed Effects:
-##      (Intr)
-## Days -0.138</code></pre>
-</div>
-<div id="libsemx-implementation" class="section level3">
-<h3>1.2 libsemx Implementation</h3>
-<pre class="r"><code>model_glmm &lt;- semx_model(
-  equations = c(&quot;Reaction ~ 1 + Days + (1 + Days | Subject)&quot;),
-  families = c(Reaction = &quot;gaussian&quot;)
-)
-
-# Fit using LBFGS
-fit_glmm &lt;- semx_fit(model_glmm, sleepstudy, optimizer_name = &quot;lbfgs&quot;, estimation_method = &quot;ML&quot;)
-summ_glmm &lt;- summary(fit_glmm)
-print(summ_glmm)</code></pre>
-<pre><code>## Optimization converged: FALSE 
-## Iterations: 1000 
-## Log-likelihood: -875.970
-## Chi-square: 1763.939 (df=NA)
-## AIC: 1763.9, BIC: 1783.1
-## 
-##                                 Estimate Std.Error z.value P.value
-## alpha_Reaction_on__intercept 251.4032586       NaN     NaN     NaN
-## beta_Reaction_on_Days         10.4673465       NaN     NaN     NaN
-## psi_Reaction_Reaction        654.9408426       NaN     NaN     NaN
-## cov_re_1_0                    23.7805669       NaN     NaN     NaN
-## cov_re_1_1                     0.4648932       NaN     NaN     NaN
-## cov_re_1_2                     5.6979006       NaN     NaN     NaN</code></pre>
-</div>
-<div id="comparison" class="section level3">
-<h3>1.3 Comparison</h3>
-<pre class="r"><code># Extract lme4 values
-fe_lme4 &lt;- fixef(fm1)
-vc_lme4 &lt;- VarCorr(fm1)
-sigma_lme4 &lt;- sigma(fm1)
-
-# Extract semx values
-params_semx &lt;- summ_glmm$parameters
-
-# Helper to safely get parameter
-get_param &lt;- function(df, pattern) {
-  idx &lt;- grep(pattern, rownames(df))
-  if (length(idx) &gt; 0) df[idx[1], &quot;Estimate&quot;] else NA
-}
-
-fe_semx &lt;- c(
-  Intercept = get_param(params_semx, &quot;alpha_Reaction_on__intercept&quot;),
-  Days = get_param(params_semx, &quot;beta_Reaction_on_Days&quot;)
-)
-
-fe_comp &lt;- data.frame(
-  Parameter = c(&quot;Intercept&quot;, &quot;Days&quot;),
-  lme4 = as.numeric(fe_lme4),
-  semx = as.numeric(fe_semx)
-)
-fe_comp$Diff &lt;- fe_comp$lme4 - fe_comp$semx
-kable(fe_comp, caption = &quot;Fixed Effects Comparison&quot;)</code></pre>
-<table>
-<caption>Fixed Effects Comparison</caption>
-<thead>
-<tr class="header">
-<th align="left">Parameter</th>
-<th align="right">lme4</th>
-<th align="right">semx</th>
-<th align="right">Diff</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td align="left">Intercept</td>
-<td align="right">251.40510</td>
-<td align="right">251.40326</td>
-<td align="right">0.0018462</td>
-</tr>
-<tr class="even">
-<td align="left">Days</td>
-<td align="right">10.46729</td>
-<td align="right">10.46735</td>
-<td align="right">-0.0000606</td>
-</tr>
-</tbody>
-</table>
-<pre class="r"><code># Variance Components
-re_var_int_lme4 &lt;- vc_lme4$Subject[1,1]
-re_cov_lme4 &lt;- vc_lme4$Subject[1,2]
-re_var_slope_lme4 &lt;- vc_lme4$Subject[2,2]
-resid_var_lme4 &lt;- sigma_lme4^2
-
-# semx returns Cholesky factors for random effects covariance
-# L = [L00, 0; L10, L11]
-# stored as cov_re_1_0 (L00), cov_re_1_1 (L10), cov_re_1_2 (L11)
-L00 &lt;- get_param(params_semx, &quot;cov_re_1_0&quot;)
-L10 &lt;- get_param(params_semx, &quot;cov_re_1_1&quot;)
-L11 &lt;- get_param(params_semx, &quot;cov_re_1_2&quot;)
-
-re_var_int_semx &lt;- L00^2
-re_cov_semx &lt;- L00 * L10
-re_var_slope_semx &lt;- L10^2 + L11^2
-resid_var_semx &lt;- get_param(params_semx, &quot;psi_Reaction_Reaction&quot;)
-
-vc_comp &lt;- data.frame(
-  Component = c(&quot;Subject (Intercept)&quot;, &quot;Subject (Covariance)&quot;, &quot;Subject (Slope)&quot;, &quot;Residual&quot;),
-  lme4 = c(re_var_int_lme4, re_cov_lme4, re_var_slope_lme4, resid_var_lme4),
-  semx = c(re_var_int_semx, re_cov_semx, re_var_slope_semx, resid_var_semx)
-)
-vc_comp$Diff &lt;- vc_comp$lme4 - vc_comp$semx
-kable(vc_comp, caption = &quot;Variance Components Comparison&quot;)</code></pre>
-<table>
-<caption>Variance Components Comparison</caption>
-<thead>
-<tr class="header">
-<th align="left">Component</th>
-<th align="right">lme4</th>
-<th align="right">semx</th>
-<th align="right">Diff</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td align="left">Subject (Intercept)</td>
-<td align="right">565.47697</td>
-<td align="right">565.51536</td>
-<td align="right">-0.0383963</td>
-</tr>
-<tr class="even">
-<td align="left">Subject (Covariance)</td>
-<td align="right">11.05512</td>
-<td align="right">11.05542</td>
-<td align="right">-0.0003004</td>
-</tr>
-<tr class="odd">
-<td align="left">Subject (Slope)</td>
-<td align="right">32.68179</td>
-<td align="right">32.68220</td>
-<td align="right">-0.0004115</td>
-</tr>
-<tr class="even">
-<td align="left">Residual</td>
-<td align="right">654.94571</td>
-<td align="right">654.94084</td>
-<td align="right">0.0048632</td>
-</tr>
-</tbody>
-</table>
-<pre class="r"><code># Likelihood
-ll_comp &lt;- data.frame(
-  Metric = &quot;Log-Likelihood&quot;,
-  lme4 = as.numeric(logLik(fm1)),
-  semx = summ_glmm$fit_indices$loglik
-)
-kable(ll_comp, caption = &quot;Model Fit Comparison&quot;)</code></pre>
-<table>
-<caption>Model Fit Comparison</caption>
-<thead>
-<tr class="header">
-<th align="left">Metric</th>
-<th align="right">lme4</th>
-<th align="right">semx</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td align="left">Log-Likelihood</td>
-<td align="right">-875.9697</td>
-<td align="right">-875.9697</td>
-</tr>
-</tbody>
-</table>
-</div>
-</div>
-<div id="part-2-structural-equation-model-cfa" class="section level2">
-<h2>Part 2: Structural Equation Model (CFA)</h2>
-<p>We compare results for a standard CFA model using the
-<code>HolzingerSwineford1939</code> dataset.</p>
-<div id="lavaan-implementation" class="section level3">
-<h3>2.1 lavaan Implementation</h3>
-<pre class="r"><code>data(HolzingerSwineford1939)
-HS.model &lt;- &#39; visual  =~ x1 + x2 + x3
-              textual =~ x4 + x5 + x6
-              speed   =~ x7 + x8 + x9 &#39;
-
-fit_lav &lt;- cfa(HS.model, data = HolzingerSwineford1939, std.lv = FALSE)
-summary(fit_lav, fit.measures = TRUE)</code></pre>
-<pre><code>## lavaan 0.6-19 ended normally after 35 iterations
-## 
-##   Estimator                                         ML
-##   Optimization method                           NLMINB
-##   Number of model parameters                        21
-## 
-##   Number of observations                           301
-## 
-## Model Test User Model:
-##                                                       
-##   Test statistic                                85.306
-##   Degrees of freedom                                24
-##   P-value (Chi-square)                           0.000
-## 
-## Model Test Baseline Model:
-## 
-##   Test statistic                               918.852
-##   Degrees of freedom                                36
-##   P-value                                        0.000
-## 
-## User Model versus Baseline Model:
-## 
-##   Comparative Fit Index (CFI)                    0.931
-##   Tucker-Lewis Index (TLI)                       0.896
-## 
-## Loglikelihood and Information Criteria:
-## 
-##   Loglikelihood user model (H0)              -3737.745
-##   Loglikelihood unrestricted model (H1)      -3695.092
-##                                                       
-##   Akaike (AIC)                                7517.490
-##   Bayesian (BIC)                              7595.339
-##   Sample-size adjusted Bayesian (SABIC)       7528.739
-## 
-## Root Mean Square Error of Approximation:
-## 
-##   RMSEA                                          0.092
-##   90 Percent confidence interval - lower         0.071
-##   90 Percent confidence interval - upper         0.114
-##   P-value H_0: RMSEA &lt;= 0.050                    0.001
-##   P-value H_0: RMSEA &gt;= 0.080                    0.840
-## 
-## Standardized Root Mean Square Residual:
-## 
-##   SRMR                                           0.065
-## 
-## Parameter Estimates:
-## 
-##   Standard errors                             Standard
-##   Information                                 Expected
-##   Information saturated (h1) model          Structured
-## 
-## Latent Variables:
-##                    Estimate  Std.Err  z-value  P(&gt;|z|)
-##   visual =~                                           
-##     x1                1.000                           
-##     x2                0.554    0.100    5.554    0.000
-##     x3                0.729    0.109    6.685    0.000
-##   textual =~                                          
-##     x4                1.000                           
-##     x5                1.113    0.065   17.014    0.000
-##     x6                0.926    0.055   16.703    0.000
-##   speed =~                                            
-##     x7                1.000                           
-##     x8                1.180    0.165    7.152    0.000
-##     x9                1.082    0.151    7.155    0.000
-## 
-## Covariances:
-##                    Estimate  Std.Err  z-value  P(&gt;|z|)
-##   visual ~~                                           
-##     textual           0.408    0.074    5.552    0.000
-##     speed             0.262    0.056    4.660    0.000
-##   textual ~~                                          
-##     speed             0.173    0.049    3.518    0.000
-## 
-## Variances:
-##                    Estimate  Std.Err  z-value  P(&gt;|z|)
-##    .x1                0.549    0.114    4.833    0.000
-##    .x2                1.134    0.102   11.146    0.000
-##    .x3                0.844    0.091    9.317    0.000
-##    .x4                0.371    0.048    7.779    0.000
-##    .x5                0.446    0.058    7.642    0.000
-##    .x6                0.356    0.043    8.277    0.000
-##    .x7                0.799    0.081    9.823    0.000
-##    .x8                0.488    0.074    6.573    0.000
-##    .x9                0.566    0.071    8.003    0.000
-##     visual            0.809    0.145    5.564    0.000
-##     textual           0.979    0.112    8.737    0.000
-##     speed             0.384    0.086    4.451    0.000</code></pre>
-</div>
-<div id="libsemx-implementation-1" class="section level3">
-<h3>2.2 libsemx Implementation</h3>
-<pre class="r"><code>model_sem &lt;- semx_model(
-  equations = c(
-    &quot;visual  =~ x1 + x2 + x3&quot;,
-    &quot;textual =~ x4 + x5 + x6&quot;,
-    &quot;speed   =~ x7 + x8 + x9&quot;,
-    # Explicitly add intercepts for indicators
-    &quot;x1 ~ 1&quot;, &quot;x2 ~ 1&quot;, &quot;x3 ~ 1&quot;,
-    &quot;x4 ~ 1&quot;, &quot;x5 ~ 1&quot;, &quot;x6 ~ 1&quot;,
-    &quot;x7 ~ 1&quot;, &quot;x8 ~ 1&quot;, &quot;x9 ~ 1&quot;,
-    # Explicitly add covariances between latent factors
-    &quot;visual ~~ textual&quot;,
-    &quot;visual ~~ speed&quot;,
-    &quot;textual ~~ speed&quot;
+<div id="define-genomic-model" class="section level2">
+<h2>2. Define Genomic Model</h2>
+<p>We define the mixed model: $ y = + u + e $</p>
+<pre class="r"><code># Define the model
+# Note: In R, we pass the marker matrix in the genomic list.
+model &lt;- semx_model(
+  equations = c(&quot;EarHT_std ~ 1&quot;),
+  families = c(EarHT_std = &quot;gaussian&quot;),
+  genomic = list(
+    polygenic = list(
+      markers = M,
+      structure = &quot;grm&quot;
+    )
   ),
-  families = list(
-    x1=&quot;gaussian&quot;, x2=&quot;gaussian&quot;, x3=&quot;gaussian&quot;,
-    x4=&quot;gaussian&quot;, x5=&quot;gaussian&quot;, x6=&quot;gaussian&quot;,
-    x7=&quot;gaussian&quot;, x8=&quot;gaussian&quot;, x9=&quot;gaussian&quot;
+  random_effects = list(
+    list(
+      name = &quot;u&quot;,
+      variables = c(&quot;all_groups&quot;),
+      covariance = &quot;polygenic&quot;
+    )
   )
-)
+)</code></pre>
+</div>
+<div id="fit-model-and-analyze-results" class="section level2">
+<h2>3. Fit Model and Analyze Results</h2>
+<pre class="r"><code># Fit the model
+fit &lt;- semx_fit(model, merged_df)
 
-fit_semx &lt;- semx_fit(model_sem, HolzingerSwineford1939, optimizer_name = &quot;lbfgs&quot;)
-summ_semx &lt;- summary(fit_semx)
-print(summ_semx)</code></pre>
+# Display Summary
+summary(fit)</code></pre>
 <pre><code>## Optimization converged: TRUE 
-## Iterations: 86 
-## Log-likelihood: -3737.745
-## Chi-square: 7535.490 (df=24)
-## P-value: 0.000
-## CFI: 0.931, TLI: 0.896, RMSEA: 0.092, SRMR: 0.059 
-## AIC: 7535.5, BIC: 7646.7
+## Iterations: 25 
+## Log-likelihood: -357.404
+## Chi-square: 720.809 (df=NA)
+## AIC: 720.8, BIC: 731.7
 ## 
-##                         Estimate  Std.Error   z.value      P.value
-## lambda_x2_on_visual    0.5535002 0.10924717  5.066495 4.052084e-07
-## lambda_x3_on_visual    0.7293706 0.11726753  6.219715 4.980603e-10
-## lambda_x5_on_textual   1.1130765 0.06498646 17.127823 0.000000e+00
-## lambda_x6_on_textual   0.9261462 0.05619466 16.481035 0.000000e+00
-## lambda_x8_on_speed     1.1799502 0.15028798  7.851261 4.218847e-15
-## lambda_x9_on_speed     1.0815301 0.19512311  5.542809 2.976572e-08
-## alpha_x1_on__intercept 4.9357697 0.06717780 73.473227 0.000000e+00
-## alpha_x2_on__intercept 6.0880399 0.06775429 89.854675 0.000000e+00
-## alpha_x3_on__intercept 2.2504153 0.06508019 34.579112 0.000000e+00
-## alpha_x4_on__intercept 3.0609081 0.06698700 45.694065 0.000000e+00
-## alpha_x5_on__intercept 4.3405316 0.07425792 58.452104 0.000000e+00
-## alpha_x6_on__intercept 2.1855719 0.06304453 34.667115 0.000000e+00
-## alpha_x7_on__intercept 4.1859021 0.06269526 66.765843 0.000000e+00
-## alpha_x8_on__intercept 5.5270764 0.05826913 94.854277 0.000000e+00
-## alpha_x9_on__intercept 5.3741233 0.05806984 92.545866 0.000000e+00
-## psi_textual_visual     0.4082324 0.07207195  5.664234 1.476827e-08
-## psi_speed_visual       0.2622247 0.05599344  4.683132 2.825238e-06
-## psi_speed_textual      0.1734948 0.04733910  3.664937 2.473997e-04
-## psi_visual_visual      0.8093154 0.08323276  9.723520 0.000000e+00
-## psi_x1_x1              0.5490544 0.11904880  4.612011 3.987912e-06
-## psi_x2_x2              1.1338400 0.10426232 10.874878 0.000000e+00
-## psi_x3_x3              0.8443241 0.09507459  8.880649 0.000000e+00
-## psi_textual_textual    0.9794916 0.05490484 17.839805 0.000000e+00
-## psi_x4_x4              0.3711729 0.04796287  7.738755 9.992007e-15
-## psi_x5_x5              0.4462551 0.05793342  7.702896 1.332268e-14
-## psi_x6_x6              0.3562026 0.04344054  8.199775 2.220446e-16
-## psi_speed_speed        0.3837479 0.07717162  4.972655 6.604202e-07
-## psi_x7_x7              0.7993916 0.08755959  9.129686 0.000000e+00
-## psi_x8_x8              0.4876973 0.09165911  5.320773 1.033272e-07
-## psi_x9_x9              0.5661311 0.09057887  6.250145 4.100711e-10</code></pre>
-</div>
-<div id="comparison-1" class="section level3">
-<h3>2.3 Comparison</h3>
-<pre class="r"><code># Extract lavaan estimates
-pe_lav &lt;- parameterEstimates(fit_lav)
-pe_lav_loadings &lt;- pe_lav[pe_lav$op == &quot;=~&quot;, ]
-
-# Extract semx estimates
-params_semx &lt;- summ_semx$parameters
-
-lav_est &lt;- c()
-semx_est &lt;- c()
-names_vec &lt;- c()
-
-for(i in 1:nrow(pe_lav_loadings)) {
-  lhs &lt;- pe_lav_loadings$lhs[i] # Latent
-  rhs &lt;- pe_lav_loadings$rhs[i] # Observed
-  
-  # Construct semx ID
-  # Loadings in semx are typically lambda_{rhs}_on_{lhs} or similar if generated by builder
-  # But wait, semx_model builder uses &quot;lambda&quot; prefix.
-  # Let&#39;s check the output of print(summ_semx) to be sure.
-  # It usually generates IDs like &quot;lambda_x1_on_visual&quot; if not specified.
-  
-  # Try to find matching parameter
-  # We search for &quot;lambda&quot; and rhs and lhs
-  
-  pattern &lt;- paste0(&quot;lambda.*&quot;, rhs, &quot;.*&quot;, lhs) # Loose match
-  # Or strict: lambda_{rhs}_on_{lhs}
-  # Let&#39;s try strict first
-  id &lt;- paste0(&quot;lambda_&quot;, rhs, &quot;_on_&quot;, lhs)
-  
-  val &lt;- get_param(params_semx, id)
-  if (is.na(val)) {
-      # Try alternative naming
-      id &lt;- paste0(&quot;lambda_&quot;, lhs, &quot;_&quot;, rhs)
-      val &lt;- get_param(params_semx, id)
-  }
-  
-  if (!is.na(val)) {
-    names_vec &lt;- c(names_vec, paste(lhs, &quot;=~&quot;, rhs))
-    lav_est &lt;- c(lav_est, pe_lav_loadings$est[i])
-    semx_est &lt;- c(semx_est, val)
-  }
+##                                    Estimate  Std.Error       z.value
+## alpha_EarHT_std_on__intercept -1.874249e-10 0.03011539 -6.223560e-09
+## psi_EarHT_std_EarHT_std        2.530343e-01 0.08216702  3.079511e+00
+## polygenic_0                    6.679959e-01 0.14116374  4.732064e+00
+##                                    P.value
+## alpha_EarHT_std_on__intercept 1.000000e+00
+## psi_EarHT_std_EarHT_std       2.073405e-03
+## polygenic_0                   2.222482e-06</code></pre>
+<pre class="r"><code># Extract Variance Components
+# Note: semx returns variance components in the parameters list.
+# For a GRM model, we expect &#39;cov_re_1_polygenic&#39; (genetic variance) and &#39;psi_EarHT_std_EarHT_std&#39; (residual variance).
+# The names might vary based on internal naming.
+params &lt;- fit$optimization_result$parameters
+if (!is.null(fit$parameter_names)) {
+  names(params) &lt;- fit$parameter_names
 }
-
-if (length(names_vec) &gt; 0) {
-  load_comp &lt;- data.frame(
-    Parameter = names_vec,
-    lavaan = lav_est,
-    semx = semx_est
-  )
-  load_comp$Diff &lt;- load_comp$lavaan - load_comp$semx
-  kable(load_comp, caption = &quot;Factor Loadings Comparison&quot;)
-} else {
-  print(&quot;Could not match parameter IDs automatically. Please check semx output.&quot;)
-}</code></pre>
-<table>
-<caption>Factor Loadings Comparison</caption>
-<thead>
-<tr class="header">
-<th align="left">Parameter</th>
-<th align="right">lavaan</th>
-<th align="right">semx</th>
-<th align="right">Diff</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td align="left">visual =~ x2</td>
-<td align="right">0.5535003</td>
-<td align="right">0.5535002</td>
-<td align="right">1e-07</td>
-</tr>
-<tr class="even">
-<td align="left">visual =~ x3</td>
-<td align="right">0.7293702</td>
-<td align="right">0.7293706</td>
-<td align="right">-3e-07</td>
-</tr>
-<tr class="odd">
-<td align="left">textual =~ x5</td>
-<td align="right">1.1130766</td>
-<td align="right">1.1130765</td>
-<td align="right">1e-07</td>
-</tr>
-<tr class="even">
-<td align="left">textual =~ x6</td>
-<td align="right">0.9261462</td>
-<td align="right">0.9261462</td>
-<td align="right">0e+00</td>
-</tr>
-<tr class="odd">
-<td align="left">speed =~ x8</td>
-<td align="right">1.1799508</td>
-<td align="right">1.1799502</td>
-<td align="right">6e-07</td>
-</tr>
-<tr class="even">
-<td align="left">speed =~ x9</td>
-<td align="right">1.0815302</td>
-<td align="right">1.0815301</td>
-<td align="right">0e+00</td>
-</tr>
-</tbody>
-</table>
-<pre class="r"><code># Fit Indices
-fit_lav_meas &lt;- fitMeasures(fit_lav)
-fi_comp &lt;- data.frame(
-  Index = c(&quot;CFI&quot;, &quot;TLI&quot;, &quot;RMSEA&quot;, &quot;SRMR&quot;, &quot;AIC&quot;, &quot;BIC&quot;),
-  lavaan = c(fit_lav_meas[&quot;cfi&quot;], fit_lav_meas[&quot;tli&quot;], fit_lav_meas[&quot;rmsea&quot;], fit_lav_meas[&quot;srmr&quot;], fit_lav_meas[&quot;aic&quot;], fit_lav_meas[&quot;bic&quot;]),
-  semx = c(summ_semx$fit_indices$cfi, summ_semx$fit_indices$tli, summ_semx$fit_indices$rmsea, summ_semx$fit_indices$srmr, summ_semx$fit_indices$aic, summ_semx$fit_indices$bic)
-)
-kable(fi_comp, caption = &quot;Fit Indices Comparison&quot;)</code></pre>
-<table>
-<caption>Fit Indices Comparison</caption>
-<thead>
-<tr class="header">
-<th align="left"></th>
-<th align="left">Index</th>
-<th align="right">lavaan</th>
-<th align="right">semx</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td align="left">cfi</td>
-<td align="left">CFI</td>
-<td align="right">0.9305597</td>
-<td align="right">0.9305597</td>
-</tr>
-<tr class="even">
-<td align="left">tli</td>
-<td align="left">TLI</td>
-<td align="right">0.8958395</td>
-<td align="right">0.8958395</td>
-</tr>
-<tr class="odd">
-<td align="left">rmsea</td>
-<td align="left">RMSEA</td>
-<td align="right">0.0921215</td>
-<td align="right">0.0921215</td>
-</tr>
-<tr class="even">
-<td align="left">srmr</td>
-<td align="left">SRMR</td>
-<td align="right">0.0652051</td>
-<td align="right">0.0589802</td>
-</tr>
-<tr class="odd">
-<td align="left">aic</td>
-<td align="left">AIC</td>
-<td align="right">7517.4898533</td>
-<td align="right">7535.4898533</td>
-</tr>
-<tr class="even">
-<td align="left">bic</td>
-<td align="left">BIC</td>
-<td align="right">7595.3391688</td>
-<td align="right">7646.7031612</td>
-</tr>
-</tbody>
-</table>
-</div>
+print(params)</code></pre>
+<pre><code>## alpha_EarHT_std_on__intercept       psi_EarHT_std_EarHT_std 
+##                 -1.874249e-10                  2.530343e-01 
+##                   polygenic_0 
+##                  6.679959e-01</code></pre>
 </div>
 
 

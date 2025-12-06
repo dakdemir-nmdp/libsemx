@@ -9,7 +9,8 @@ semx_fit(
   data,
   options = NULL,
   optimizer_name = "lbfgs",
-  fixed_covariance_data = NULL
+  fixed_covariance_data = NULL,
+  estimation_method = "ML"
 )
 }
 \arguments{
@@ -22,6 +23,8 @@ semx_fit(
 \item{optimizer_name}{Name of the optimizer ("lbfgs" or "gd").}
 
 \item{fixed_covariance_data}{Optional list of fixed covariance matrices.}
+
+\item{estimation_method}{Estimation method ("ML" or "REML").}
 }
 \value{
 A FitResult object.

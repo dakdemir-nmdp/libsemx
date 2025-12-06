@@ -195,7 +195,8 @@ PYBIND11_MODULE(_libsemx, m) {
                  py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
              py::arg("method") = EstimationMethod::ML,
              py::arg("data_param_mappings") = std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>{},
-             py::arg("dispersion_param_mappings") = std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>{})
+             py::arg("dispersion_param_mappings") = std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>{},
+             py::arg("extra_param_mappings") = std::unordered_map<std::string, std::vector<std::string>>{})
             .def("fit", &LikelihoodDriver::fit,
          py::arg("model"),
          py::arg("data"),
@@ -203,7 +204,8 @@ PYBIND11_MODULE(_libsemx, m) {
          py::arg("optimizer_name") = "lbfgs",
          py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
          py::arg("status") = std::unordered_map<std::string, std::vector<double>>{},
-         py::arg("method") = EstimationMethod::ML);
+         py::arg("method") = EstimationMethod::ML,
+         py::arg("extra_param_mappings") = std::unordered_map<std::string, std::vector<std::string>>{});
 
     py::class_<GenomicRelationshipMatrix>(m, "GenomicRelationshipMatrix")
         .def_static("vanraden",

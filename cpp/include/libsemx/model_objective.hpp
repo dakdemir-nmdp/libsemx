@@ -18,7 +18,8 @@ public:
                    const std::unordered_map<std::string, std::vector<double>>& data,
                    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                    const std::unordered_map<std::string, std::vector<double>>& status = {},
-                   EstimationMethod method = EstimationMethod::ML);
+                   EstimationMethod method = EstimationMethod::ML,
+                   const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings = {});
 
     [[nodiscard]] double value(const std::vector<double>& parameters) const override;
 
@@ -46,8 +47,15 @@ public:
                                      std::unordered_map<std::string, std::vector<double>>& dispersions,
                                      std::unordered_map<std::string, std::vector<double>>& covariance_parameters) const;
 
+    std::unordered_map<std::string, std::vector<double>> build_extra_params(const std::vector<double>& constrained_parameters) const;
+
+    std::unordered_map<std::string, std::vector<std::string>> build_extra_param_mappings() const;
+
 private:
     void prepare_sem_structures();
+
+    std::unordered_map<std::string, double> fixed_parameters_;
+
     void update_sem_data(const std::vector<double>& constrained_parameters) const;
 
     const LikelihoodDriver& driver_;
@@ -58,6 +66,7 @@ private:
     EstimationMethod method_;
     ParameterCatalog catalog_;
     std::unordered_map<std::string, std::pair<size_t, size_t>> covariance_param_ranges_;
+    std::unordered_map<std::string, std::vector<std::string>> extra_param_mappings_;
 
     // SEM support
     bool sem_mode_{false};

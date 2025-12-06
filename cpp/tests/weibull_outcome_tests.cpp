@@ -62,10 +62,10 @@ TEST_CASE("WeibullOutcome evaluates log-likelihood", "[outcome][weibull]") {
 TEST_CASE("WeibullOutcome rejects invalid inputs", "[outcome][weibull]") {
     libsemx::WeibullOutcome weibull;
 
-    REQUIRE_THROWS_AS(weibull.evaluate(0.0, 0.0, 1.0, 1.0), std::invalid_argument);
-    REQUIRE_THROWS_AS(weibull.evaluate(-1.0, 0.0, 1.0, 1.0), std::invalid_argument);
-    REQUIRE_THROWS_AS(weibull.evaluate(1.0, 0.0, 0.0, 1.0), std::invalid_argument);
-    REQUIRE_THROWS_AS(weibull.evaluate(1.0, 0.0, -1.0, 1.0), std::invalid_argument);
+    REQUIRE_THROWS_AS( weibull.evaluate(0.0, 0.0, 1.0, 1.0), std::runtime_error );
+    REQUIRE_THROWS_AS( weibull.evaluate(-1.0, 0.0, 1.0, 1.0), std::runtime_error );
+    REQUIRE_THROWS_AS( weibull.evaluate(1.0, 0.0, 0.0, 1.0), std::runtime_error );
+    REQUIRE_THROWS_AS( weibull.evaluate(1.0, 0.0, -1.0, 1.0), std::runtime_error );
 }
 
 TEST_CASE("WeibullOutcome default dispersion", "[outcome][weibull]") {

@@ -21,7 +21,8 @@ enum class EdgeKind {
 
 enum class ParameterConstraint {
     Free,
-    Positive
+    Positive,
+    Fixed
 };
 
 struct VariableSpec {

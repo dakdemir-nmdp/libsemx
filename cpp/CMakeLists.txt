@@ -32,6 +32,7 @@ add_library(libsemx STATIC
     src/libsemx/lognormal_outcome.cpp
     src/libsemx/loglogistic_outcome.cpp
     src/libsemx/ordinal_outcome.cpp
+    src/libsemx/fixed_outcome.cpp
     src/libsemx/model_ir.cpp
     src/libsemx/optimizer.cpp
     src/libsemx/likelihood_driver.cpp

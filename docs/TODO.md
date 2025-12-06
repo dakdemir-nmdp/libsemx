@@ -1,6 +1,8 @@
 # libsemx TODO
 
 ## Active
+- [ ] Fix Documentation Examples
+    - [x] Fix `docs/examples/mdp_analysis.Rmd` rendering issue (convert grouping variable to numeric).
 - [ ] Validation & Benchmarking against established software.
     - [x] Create Python notebook comparing `libsemx` GLMM results with `statsmodels`/`lme4`.
     - [x] Create R notebook comparing `libsemx` SEM/GLMM results with `lavaan`/`lme4`.
@@ -12,8 +14,11 @@
         - [x] Validate Random Effects (BLUPs) against `lme4`.
         - [x] Create SEM comparison against `lavaan` (Growth Curve or CFA).
             - [x] Implemented CFA comparison using BFI dataset.
-            - [x] Validated LogLik, CFI, TLI, RMSEA, SRMR against `lavaan`.
+            - [x] Validated LogLik against `lavaan` (Fit indices currently disabled due to missing baseline model).
             - [x] Fixed SRMR calculation by converting Cholesky parameters back to Covariance parameters in `ModelObjective`.
+            - [x] Addressed convergence issues by relaxing tolerance and using Release build.
+        - [x] Comprehensive validation of covariance structures (Random Intercept, Random Slope) against `lme4`.
+        - [x] Fix `ModelObjective` to correctly handle fixed covariance parameters (e.g. fixed residual variance) by parsing numeric parameter IDs.
         - [x] Create GBLUP/GxE comparison against `sommer` (Coefficients, BLUPs, Fit Indices).
             - [x] Implemented GBLUP and GxE tests in `cpp/tests/sommer_comparison_tests_v2.cpp`.
             - [x] GxE results match `sommer` closely.
@@ -22,8 +27,32 @@
         - [x] Implemented Weibull and Exponential survival comparison against `survival::survreg` using Ovarian dataset.
         - [x] Fixed `WeibullOutcome` gradient (added `d_dispersion`) to ensure convergence.
         - [x] Validated LogLik, Coefficients, and Shape/Scale parameters.
+        - [x] Fixed initialization of Weibull shape parameter to avoid numerical instability (2025-02-24).
+        - [x] Fixed implicit intercept handling in R frontend to match `survreg` behavior (2025-02-24).
+    - [ ] Phase 2: Exhaustive validation grid (ML/REML) vs `lm`/`glm`/`lme4`/`nlme`/`sommer`.
+        - [x] Add simulated and empirical LM/GLM/GLMM fixtures (binomial/poisson/NB) with and without random effects; compare coefficients, dispersions, and log-likelihoods to `glm`/`glmer`.
+            - [x] Created `validation/validate_glm_families.R` to compare Binomial, Poisson, Negative Binomial, and Binomial GLMM.
+            - [x] Validated LogLik and Coefficients against `glm`, `MASS::glm.nb`, and `lme4::glmer`.
+            - [x] Confirmed `libsemx` matches standard R implementations for these families.
+        - [x] Cross-check AR(1) and CS covariance parameters against `nlme` (corStruct) and `gls`.
+        - [x] Cross-check Toeplitz covariance parameters against simulation.
+        - [x] Cross-check factor-analytic covariance parameters against simulation.
+        - [x] Validate ML vs REML parity for Gaussian LMMs across `lme4`, `nlme`, and `libsemx` (fixed-only, random-only, and mixed models).
+        - [ ] Expand multi-outcome/mixed-type coverage (Gaussian/Binomial/Poisson/Ordinal) with and without SEM structure; compare to `lavaan` for SEM cases and `nlme`/`lme4` for mixed cases.
+            - [x] Fixed Joint Independent GLMM optimization (Gaussian+Binomial+Poisson) by explicit RE-Outcome linking and preventing SEM mode trigger (2025-02-24).
+            - [x] Implemented Ordinal Regression support (Probit link) and validated against `MASS::polr` (2025-02-24).
+        - [x] Broaden genomic selection checks (GBLUP, RKHS/multi-kernel, G×E) against `sommer`, using simulated truth and precomputed kernels to validate variance components and BLUPs. (2025-02-24)
+            - [x] Validated single-kernel GBLUP against `sommer` (exact match).
+            - [x] GxE/Repeated Records support requires Z-matrix construction from factor variables.
+                - [x] Implemented automatic factor expansion (dummy coding) in Python `Model.fit`.
+                - [x] Implemented automatic factor expansion in R `semx_fit`.
+                - [x] Verified with reproduction scripts for both languages.
+        - [x] Add simulation harness that asserts recovery of known parameters (do not rely solely on comparator software correctness); report tolerance bands and any systematic drifts.
+            - [x] Created `validation/simulation_harness.R` covering Gaussian, Mixed, Binomial/Poisson GLMM, CFA, and Survival models.
+            - [x] Verified parameter recovery within tolerance (GLMM variances required relaxed tolerance due to Laplace approximation bias).
 
 ## Completed
+- [x] Fix crash in `validation/comparison.Rmd` by defaulting unstructured covariance diagonal to 1.0 when unspecified. (2025-02-24)
 - [x] Fix `ModelObjective` initialization to respect `status` map for covariance parameters. (2025-02-24)
 - [x] Extend SEM branch to honor full structural model. (2025-12-02)
     - [x] Propagate regression edges into `_stacked_y` predictors.

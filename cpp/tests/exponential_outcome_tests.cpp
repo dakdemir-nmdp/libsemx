@@ -45,7 +45,7 @@ TEST_CASE("ExponentialOutcome survival contributions match the Weibull special c
     }
 
     SECTION("Input validation") {
-        REQUIRE_THROWS_AS(expo.evaluate(0.0, eta, 1.0, 1.0), std::invalid_argument);
-        REQUIRE_THROWS_AS(expo.evaluate(-1.0, eta, 1.0, 1.0), std::invalid_argument);
+        REQUIRE_THROWS_AS(expo.evaluate(0.0, eta, 1.0, 1.0), std::runtime_error);
+        REQUIRE_THROWS_AS(expo.evaluate(-1.0, eta, 1.0, 1.0), std::runtime_error);
     }
 }

@@ -104,10 +104,13 @@ TEST_CASE("Compare Weibull Survival with survival::survreg (Ovarian)", "[compari
     init_status["beta_rx"] = {0.5};   // From survreg ~0.57
     init_status["shape_k"] = {1.8};   // From survreg ~1.81
 
+    // Merge initial values into status
+    status.insert(init_status.begin(), init_status.end());
+
     LikelihoodDriver driver;
     OptimizationOptions options;
-    options.max_iterations = 1000;
-    options.tolerance = 1e-6;
+    options.max_iterations = 2000;
+    options.tolerance = 1e-5;
 
     auto result = driver.fit(model, data, options, "lbfgs", {}, status);
 

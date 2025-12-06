@@ -75,7 +75,8 @@ public:
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                                                 EstimationMethod method = EstimationMethod::ML,
                                                 const std::unordered_map<std::string, DataParamMapping>& data_param_mappings = {},
-                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {}) const;
+                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {},
+                                                const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings = {}) const;
 
     [[nodiscard]] std::pair<double, std::unordered_map<std::string, double>> evaluate_model_loglik_and_gradient(
                                                 const ModelIR& model,
@@ -88,7 +89,8 @@ public:
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                                                 EstimationMethod method = EstimationMethod::ML,
                                                 const std::unordered_map<std::string, DataParamMapping>& data_param_mappings = {},
-                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {}) const;
+                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings = {},
+                                                const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings = {}) const;
 
     [[nodiscard]] std::unordered_map<std::string, std::vector<double>> compute_random_effects(
                                                 const ModelIR& model,
@@ -106,7 +108,8 @@ public:
                                          const std::string& optimizer_name = "lbfgs",
                                          const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                                          const std::unordered_map<std::string, std::vector<double>>& status = {},
-                                         EstimationMethod method = EstimationMethod::ML) const;
+                                         EstimationMethod method = EstimationMethod::ML,
+                                         const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings = {}) const;
 
 private:
     // Cached Laplace system to avoid rebuilding block/group structure on every evaluation.

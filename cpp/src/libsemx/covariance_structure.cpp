@@ -10,6 +10,7 @@
 #include <cctype>
 #include <string_view>
 #include <optional>
+#include <iostream>
 
 namespace libsemx {
 
@@ -18,14 +19,14 @@ namespace {
     return n * (n + 1) / 2;
 }
 
-[[nodiscard]] double positive_to_correlation(double positive_value) {
-    // Map (0, inf) -> (-1, 1)
-    return (positive_value - 1.0) / (positive_value + 1.0);
+[[nodiscard]] double transform_to_correlation(double value) {
+    // Map (-inf, inf) -> (-1, 1)
+    return std::tanh(value);
 }
 
-[[nodiscard]] double positive_to_correlation_derivative(double positive_value) {
-    const double denom = positive_value + 1.0;
-    return 2.0 / (denom * denom);
+[[nodiscard]] double transform_to_correlation_derivative(double value) {
+    const double t = std::tanh(value);
+    return 1.0 - t * t;
 }
 
 std::string normalize_structure_id(const std::string& id) {
@@ -360,7 +361,7 @@ AR1Covariance::AR1Covariance(std::size_t dimension)
 void AR1Covariance::fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const {
     const std::size_t dim = dimension();
     const double variance = parameters[0];
-    const double rho = (parameter_count() > 1) ? positive_to_correlation(parameters[1]) : 0.0;
+    const double rho = (parameter_count() > 1) ? transform_to_correlation(parameters[1]) : 0.0;
     for (std::size_t i = 0; i < dim; ++i) {
         for (std::size_t j = 0; j < dim; ++j) {
             const std::size_t dist = (i > j) ? (i - j) : (j - i);
@@ -375,9 +376,6 @@ void AR1Covariance::validate_parameters(const std::vector<double>& parameters) c
     if (!(parameters[0] > 0.0)) {
         throw std::invalid_argument("AR(1) variance must be positive");
     }
-    if (parameter_count() > 1 && !(parameters[1] > 0.0)) {
-        throw std::invalid_argument("AR(1) correlation parameter must be positive");
-    }
 }
 
 std::vector<std::vector<double>> AR1Covariance::parameter_gradients(const std::vector<double>& parameters) const {
@@ -387,7 +385,7 @@ std::vector<std::vector<double>> AR1Covariance::parameter_gradients(const std::v
     std::vector<std::vector<double>> grads(pc, std::vector<double>(dim * dim, 0.0));
 
     const double variance = parameters[0];
-    const double rho = (pc > 1) ? positive_to_correlation(parameters[1]) : 0.0;
+    const double rho = (pc > 1) ? transform_to_correlation(parameters[1]) : 0.0;
 
     for (std::size_t i = 0; i < dim; ++i) {
         for (std::size_t j = 0; j < dim; ++j) {
@@ -395,7 +393,7 @@ std::vector<std::vector<double>> AR1Covariance::parameter_gradients(const std::v
             const double base = (dist == 0) ? 1.0 : std::pow(rho, static_cast<double>(dist));
             grads[0][i * dim + j] = base;
             if (pc > 1 && dist > 0) {
-                const double drho = positive_to_correlation_derivative(parameters[1]);
+                const double drho = transform_to_correlation_derivative(parameters[1]);
                 const double pow_term = (dist == 1) ? 1.0 : std::pow(rho, static_cast<double>(dist - 1));
                 grads[1][i * dim + j] = variance * dist * pow_term * drho;
             }
@@ -413,11 +411,12 @@ void ToeplitzCovariance::fill_covariance(const std::vector<double>& parameters, 
         return;
     }
     const double variance = parameters[0];
+
     std::vector<double> kappas;
     if (dim > 1) {
         kappas.reserve(dim - 1);
         for (std::size_t idx = 1; idx < parameters.size(); ++idx) {
-            kappas.push_back(positive_to_correlation(parameters[idx]));
+            kappas.push_back(transform_to_correlation(parameters[idx]));
         }
     }
     auto moments = compute_toeplitz_autocovariance(dim, kappas, false);
@@ -437,11 +436,6 @@ void ToeplitzCovariance::validate_parameters(const std::vector<double>& paramete
     if (!(parameters[0] > 0.0)) {
         throw std::invalid_argument("Toeplitz covariance requires positive variance");
     }
-    for (std::size_t idx = 1; idx < parameters.size(); ++idx) {
-        if (!(parameters[idx] > 0.0)) {
-            throw std::invalid_argument("Toeplitz correlation parameters must be positive");
-        }
-    }
 }
 
 std::vector<std::vector<double>> ToeplitzCovariance::parameter_gradients(const std::vector<double>& parameters) const {
@@ -457,8 +451,8 @@ std::vector<std::vector<double>> ToeplitzCovariance::parameter_gradients(const s
         kappas.reserve(dim - 1);
         dkappa.reserve(dim - 1);
         for (std::size_t idx = 1; idx < parameters.size(); ++idx) {
-            kappas.push_back(positive_to_correlation(parameters[idx]));
-            dkappa.push_back(positive_to_correlation_derivative(parameters[idx]));
+            kappas.push_back(transform_to_correlation(parameters[idx]));
+            dkappa.push_back(transform_to_correlation_derivative(parameters[idx]));
         }
     }
 
@@ -710,14 +704,13 @@ std::vector<bool> build_covariance_positive_mask(const CovarianceSpec& spec,
 
     if (normalized == "ar1") {
         mask[0] = true;
-        if (mask.size() > 1) {
-            mask[1] = true;
-        }
+        // Correlation parameter is free (mapped via tanh)
         return mask;
     }
 
     if (normalized == "toeplitz") {
-        std::fill(mask.begin(), mask.end(), true);
+        mask[0] = true;
+        // Correlation parameters are free (mapped via tanh)
         return mask;
     }
 

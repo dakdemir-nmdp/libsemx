@@ -7,6 +7,9 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <numeric>
+#include <iostream>
+#include <fstream>
 #include <unordered_set>
 
 namespace libsemx {
@@ -21,9 +24,33 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                                const std::unordered_map<std::string, std::vector<double>>& data,
                                const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
                                const std::unordered_map<std::string, std::vector<double>>& status,
-                               EstimationMethod method)
-    : driver_(driver), model_(model), data_(data), fixed_covariance_data_(fixed_covariance_data), status_(status), method_(method) {
+                               EstimationMethod method,
+                               const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings)
+    : driver_(driver), model_(model), data_(data), fixed_covariance_data_(fixed_covariance_data), status_(status), method_(method), extra_param_mappings_(extra_param_mappings) {
     
+    // Pre-calculate stats for observed variables
+    std::unordered_map<std::string, double> var_means;
+    std::unordered_map<std::string, double> var_variances;
+    
+    for (const auto& [name, vec] : data_) {
+        if (vec.empty()) continue;
+        double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
+        double mean = sum / vec.size();
+        var_means[name] = mean;
+        
+        double sq_sum = 0.0;
+        for(double v : vec) sq_sum += (v - mean) * (v - mean);
+        var_variances[name] = sq_sum / vec.size(); // ML estimate
+    }
+
+    // Map parameter IDs to edges for heuristic initialization
+    std::unordered_map<std::string, const EdgeSpec*> param_to_edge;
+    for (const auto& edge : model_.edges) {
+        if (!edge.parameter_id.empty()) {
+            param_to_edge[edge.parameter_id] = &edge;
+        }
+    }
+
     if (!model_.parameters.empty()) {
         for (const auto& param : model_.parameters) {
             std::shared_ptr<const ParameterTransform> transform;
@@ -37,12 +64,53 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                     break;
             }
             double init_val = param.initial_value;
+            
+            // Apply heuristic if parameter is linked to an edge
+            if (param_to_edge.count(param.id)) {
+                const auto* edge = param_to_edge.at(param.id);
+                if (edge->kind == EdgeKind::Covariance && edge->source == edge->target) {
+                    // Check family to decide heuristic
+                    std::string fam = "";
+                    for (const auto& v : model_.variables) {
+                        if (v.name == edge->source) {
+                            fam = v.family;
+                            break;
+                        }
+                    }
+
+                    if (fam == "gaussian" || fam == "") {
+                        if (var_variances.count(edge->source)) {
+                            double heuristic = var_variances.at(edge->source) * 0.5;
+                            if (heuristic > 1e-4) {
+                                init_val = heuristic;
+                                std::cout << "Override variance for " << param.id << " = " << init_val << std::endl;
+                            }
+                        }
+                    } else if (fam == "weibull" || fam == "weibull_aft" || fam == "gamma" || fam == "exponential") {
+                        init_val = 1.0;
+                        std::cout << "Override shape/dispersion for " << param.id << " = " << init_val << std::endl;
+                    } else {
+                        // Default for others (nbinom, etc)
+                        init_val = 1.0;
+                    }
+                } else if (edge->kind == EdgeKind::Regression && (edge->source == "_intercept" || edge->source == "1")) {
+                    if (var_means.count(edge->target)) {
+                        init_val = var_means.at(edge->target);
+                    }
+                } else if (edge->kind == EdgeKind::Loading) {
+                    if (std::abs(init_val) < 1e-6) { // Only override if 0
+                        init_val = 0.8;
+                    }
+                }
+            }
+
             if (status_.count(param.id) && !status_.at(param.id).empty()) {
                 init_val = status_.at(param.id)[0];
             }
             catalog_.register_parameter(param.id, init_val, std::move(transform));
         }
     } else {
+        std::cout << "Inferring parameters from edges" << std::endl;
         for (const auto& edge : model_.edges) {
             if (edge.parameter_id.empty()) {
                 continue;
@@ -57,12 +125,31 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
             }
             if (edge.kind == EdgeKind::Covariance && edge.source == edge.target) {
                 double init_val = kDefaultVarianceInit;
+                if (var_variances.count(edge.source)) {
+                    init_val = var_variances.at(edge.source) * 0.5;
+                    if (init_val < 1e-4) init_val = kDefaultVarianceInit;
+                    std::cout << "Init variance for " << edge.parameter_id << " (" << edge.source << ") = " << init_val << std::endl;
+                } else {
+                    std::cout << "No variance stats for " << edge.source << ", using default " << kDefaultVarianceInit << std::endl;
+                }
+
                 if (status_.count(edge.parameter_id) && !status_.at(edge.parameter_id).empty()) {
                     init_val = status_.at(edge.parameter_id)[0];
                 }
                 catalog_.register_parameter(edge.parameter_id, init_val, make_log_transform());
             } else {
                 double init_val = kDefaultCoefficientInit;
+                
+                if (edge.kind == EdgeKind::Regression && (edge.source == "_intercept" || edge.source == "1")) {
+                    if (var_means.count(edge.target)) {
+                        init_val = var_means.at(edge.target);
+                        std::cout << "Init intercept for " << edge.parameter_id << " (" << edge.target << ") = " << init_val << std::endl;
+                    }
+                } else if (edge.kind == EdgeKind::Loading) {
+                    init_val = 0.8;
+                    std::cout << "Init loading for " << edge.parameter_id << " = " << init_val << std::endl;
+                }
+
                 if (status_.count(edge.parameter_id) && !status_.at(edge.parameter_id).empty()) {
                     init_val = status_.at(edge.parameter_id)[0];
                 }
@@ -183,8 +270,10 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
         }
         
         try {
-            return -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, status_, {}, fixed_covariance_data_, method_);
-        } catch (const std::runtime_error&) {
+            double ll = -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, status_, build_extra_params(constrained), fixed_covariance_data_, method_);
+            return ll;
+        } catch (const std::runtime_error& e) {
+            std::cerr << "ModelObjective::value (SEM) exception: " << e.what() << std::endl;
             return std::numeric_limits<double>::infinity();
         }
     }
@@ -196,8 +285,10 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
     build_prediction_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
 
     try {
-        return -driver_.evaluate_model_loglik(model_, data_, linear_predictors, dispersions, covariance_parameters, status_, {}, fixed_covariance_data_, method_);
-    } catch (const std::runtime_error&) {
+        double ll = -driver_.evaluate_model_loglik(model_, data_, linear_predictors, dispersions, covariance_parameters, status_, build_extra_params(constrained), fixed_covariance_data_, method_);
+        return ll;
+    } catch (const std::runtime_error& e) {
+        std::cerr << "ModelObjective::value (Non-SEM) exception: " << e.what() << std::endl;
         return std::numeric_limits<double>::infinity();
     }
 }
@@ -211,6 +302,9 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
 double ModelObjective::value_and_gradient(const std::vector<double>& parameters, std::vector<double>& grad) const {
     const auto constrained = to_constrained(parameters);
     
+    std::ofstream debug_log("data/debug_semx_objective.log", std::ios::app);
+    debug_log << "value_and_gradient called. sem_mode_: " << (sem_mode_ ? "true" : "false") << std::endl;
+
     if (sem_mode_) {
         update_sem_data(constrained);
         std::unordered_map<std::string, std::vector<double>> linear_predictors;
@@ -321,6 +415,19 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
 
         std::pair<double, std::unordered_map<std::string, double>> value_and_grad;
         try {
+            auto mappings = build_extra_param_mappings();
+            for(const auto& [k, v] : extra_param_mappings_) {
+                mappings[k] = v;
+            }
+
+            {
+                std::ofstream debug_log("data/debug_semx_objective_call.log", std::ios::app);
+                debug_log << "Calling driver with " << mappings.size() << " extra param mappings." << std::endl;
+                for(const auto& [k, v] : mappings) {
+                    debug_log << "  " << k << ": " << v.size() << " params" << std::endl;
+                }
+            }
+
             value_and_grad = driver_.evaluate_model_loglik_and_gradient(
                 sem_model_,
                 sem_data_,
@@ -328,13 +435,15 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 dispersions,
                 covariance_parameters,
                 status_,
-                {},
+                build_extra_params(constrained),
                 fixed_covariance_data_,
                 method_,
                 data_param_mappings,
-                dispersion_param_mappings
+                dispersion_param_mappings,
+                mappings
             );
-        } catch (const std::runtime_error&) {
+        } catch (const std::runtime_error& e) {
+            std::cerr << "ModelObjective::value_and_gradient (SEM) exception: " << e.what() << std::endl;
             grad.assign(parameters.size(), 0.0);
             return std::numeric_limits<double>::infinity();
         }
@@ -369,6 +478,7 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 }
             }
         }
+        
         return -value_and_grad.first;
     }
 
@@ -422,7 +532,14 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
     }
 
     std::pair<double, std::unordered_map<std::string, double>> value_and_grad;
+    static int iteration = 0;
+    iteration++;
     try {
+        auto mappings = build_extra_param_mappings();
+        for(const auto& [k, v] : extra_param_mappings_) {
+            mappings[k] = v;
+        }
+
         value_and_grad = driver_.evaluate_model_loglik_and_gradient(
             model_,
             data_,
@@ -430,12 +547,22 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             dispersions,
             covariance_parameters,
             status_,
-            {},
+            build_extra_params(constrained),
             fixed_covariance_data_,
             method_,
             {},
-            dispersion_param_mappings);
-    } catch (const std::runtime_error&) {
+            dispersion_param_mappings,
+            mappings);
+
+        if (iteration % 10 == 0 || iteration == 1) {
+            std::cout << "Iter (V&G) " << iteration << " NLL=" << -value_and_grad.first << " Params: ";
+            for (size_t i = 0; i < parameters.size(); ++i) {
+                 std::cout << catalog_.names()[i] << "=" << parameters[i] << " ";
+            }
+            std::cout << std::endl;
+        }
+    } catch (const std::runtime_error& e) {
+        std::cerr << "ModelObjective::value_and_gradient (Non-SEM) exception: " << e.what() << std::endl;
         grad.assign(parameters.size(), 0.0);
         return std::numeric_limits<double>::infinity();
     }
@@ -448,6 +575,7 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             grad[idx] -= g * chain[idx];
         }
     }
+    
     return -value_and_grad.first;
 }
 
@@ -455,7 +583,16 @@ void ModelObjective::prepare_sem_structures() {
     // 1. Identify Latents and Outcomes
     for (const auto& var : model_.variables) {
         if (var.kind == VariableKind::Latent) {
-            sem_latents_.push_back(var.name);
+            bool is_re = false;
+            for(const auto& re : model_.random_effects) {
+                if (re.id == var.name) {
+                    is_re = true;
+                    break;
+                }
+            }
+            if (!is_re) {
+                sem_latents_.push_back(var.name);
+            }
         } else if (var.kind == VariableKind::Observed) {
             bool is_target = false;
             for (const auto& edge : model_.edges) {
@@ -596,7 +733,7 @@ void ModelObjective::prepare_sem_structures() {
                         }
                     }
                 } else {
-                    elem.fixed_value = 0.0;
+                    elem.fixed_value = (i == j) ? 1.0 : 0.0;
                     elem.param_index = ParameterCatalog::npos;
                 }
                 mapping.elements.push_back(elem);
@@ -767,6 +904,11 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
                 if (idx != ParameterCatalog::npos) {
                     double val = constrained_parameters[idx];
                     std::fill(dispersions[edge.source].begin(), dispersions[edge.source].end(), val);
+                } else {
+                    try {
+                        double val = std::stod(edge.parameter_id);
+                        std::fill(dispersions[edge.source].begin(), dispersions[edge.source].end(), val);
+                    } catch (...) {}
                 }
             }
         }
@@ -841,6 +983,62 @@ std::vector<double> ModelObjective::convert_to_model_parameters(const std::vecto
     }
     
     return model_params;
+}
+
+std::unordered_map<std::string, std::vector<double>> ModelObjective::build_extra_params(const std::vector<double>& constrained_parameters) const {
+    std::unordered_map<std::string, std::vector<double>> extra_params;
+    
+    for (const auto& var : model_.variables) {
+        if (var.family == "ordinal") {
+            std::vector<double> thresholds;
+            int k = 1;
+            while (true) {
+                std::string param_id = var.name + "_threshold_" + std::to_string(k);
+                auto idx = catalog_.find_index(param_id);
+                if (idx != ParameterCatalog::npos) {
+                    thresholds.push_back(constrained_parameters[idx]);
+                    k++;
+                } else {
+                    break;
+                }
+            }
+            if (!thresholds.empty()) {
+                extra_params[var.name] = thresholds;
+            }
+        }
+    }
+    return extra_params;
+}
+
+std::unordered_map<std::string, std::vector<std::string>> ModelObjective::build_extra_param_mappings() const {
+    std::unordered_map<std::string, std::vector<std::string>> mappings;
+    
+    std::ofstream debug_file("data/debug_semx_mappings.log", std::ios::app);
+    debug_file << "Building extra param mappings..." << std::endl;
+    
+    for (const auto& var : model_.variables) {
+        debug_file << "Checking variable " << var.name << " family: " << var.family << std::endl;
+        
+        if (var.family == "ordinal") {
+            std::vector<std::string> param_ids;
+            int k = 1;
+            while (true) {
+                std::string param_id = var.name + "_threshold_" + std::to_string(k);
+                if (catalog_.find_index(param_id) != ParameterCatalog::npos) {
+                    param_ids.push_back(param_id);
+                    k++;
+                } else {
+                    debug_file << "  Did not find " << param_id << std::endl;
+                    break;
+                }
+            }
+            if (!param_ids.empty()) {
+                mappings[var.name] = param_ids;
+                debug_file << "  Added " << param_ids.size() << " thresholds for " << var.name << std::endl;
+            }
+        }
+    }
+    return mappings;
 }
 
 }  // namespace libsemx
