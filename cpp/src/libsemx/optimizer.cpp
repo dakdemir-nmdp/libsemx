@@ -7,6 +7,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+#include <iostream>
 
 namespace libsemx {
 
@@ -127,14 +128,17 @@ public:
     LBFGSFunctor(const ObjectiveFunction& function) : function_(function) {}
 
     double operator()(const Eigen::VectorXd& x, Eigen::VectorXd& grad) {
+        std::cerr << "LBFGSFunctor: start" << std::endl;
         std::vector<double> params(x.data(), x.data() + x.size());
         std::vector<double> g(grad.size());
         double value = function_.value_and_gradient(params, g);
+        std::cerr << "LBFGSFunctor: value=" << value << std::endl;
 
         if (g.size() != static_cast<std::size_t>(grad.size())) {
              throw std::runtime_error("Gradient dimension mismatch");
         }
         for(std::size_t i=0; i<g.size(); ++i) grad[i] = g[i];
+        std::cerr << "LBFGSFunctor: end" << std::endl;
 
         return value;
     }
@@ -178,8 +182,11 @@ OptimizationResult LBFGSOptimizer::optimize(const ObjectiveFunction& function,
     
     int niter = 0;
     try {
+        std::cerr << "LBFGSOptimizer: calling minimize" << std::endl;
         niter = solver.minimize(functor, x, fx);
+        std::cerr << "LBFGSOptimizer: minimize returned" << std::endl;
     } catch (...) {
+        std::cerr << "LBFGSOptimizer: exception caught" << std::endl;
         GradientDescentOptimizer fallback;
         std::vector<double> current(x.data(), x.data() + x.size());
         return fallback.optimize(function, current, options);

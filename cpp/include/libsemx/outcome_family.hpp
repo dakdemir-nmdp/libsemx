@@ -6,13 +6,13 @@
 namespace libsemx {
 
 struct OutcomeEvaluation {
-    double log_likelihood;
-    double first_derivative;
-    double second_derivative;
-    double third_derivative;
+    double log_likelihood{0.0};
+    double first_derivative{0.0};
+    double second_derivative{0.0};
+    double third_derivative{0.0};
     double d_dispersion{0.0};
-    std::vector<double> d_extra_params;
-    std::vector<double> d_hessian_d_extra_params;
+    std::vector<double> d_extra_params{};
+    std::vector<double> d_hessian_d_extra_params{};
 };
 
 class OutcomeFamily {

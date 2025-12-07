@@ -1,6 +1,5 @@
 #include <cstdio>
 #include <iostream>
-#include <fstream>
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/outcome_family_factory.hpp"
 #include "libsemx/covariance_structure.hpp"
@@ -485,6 +484,7 @@ LaplaceSystem build_laplace_system(
     std::size_t offset = 0;
     for (const auto& info : infos) {
         auto group_map = build_group_map(info, data, n);
+        int group_count = 0;
         for (const auto& [_, indices] : group_map) {
             LaplaceBlock block;
             block.info = &info;
@@ -498,6 +498,7 @@ LaplaceSystem build_laplace_system(
                 system.observation_entries[indices[row]].push_back({block_idx, row});
             }
             offset += block.q;
+            group_count++;
         }
     }
     system.total_dim = offset;
@@ -635,8 +636,16 @@ double compute_system_objective(const LaplaceSystem& system,
             if (std::isnan(outcome.obs[obs_idx])) continue;
 
             double eta = outcome.pred[obs_idx];
+
+            if (obs_idx >= system.observation_entries.size()) {
+                 std::abort();
+            }
+
             const auto& entries = system.observation_entries[obs_idx];
             for (const auto& entry : entries) {
+                if (entry.block_index >= system.blocks.size()) {
+                     std::abort();
+                }
                 const auto& block = system.blocks[entry.block_index];
                 bool targets = false;
                 for (const auto& t : block.info->target_vars) {
@@ -655,6 +664,10 @@ double compute_system_objective(const LaplaceSystem& system,
             }
 
             const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
+            
+            if (!outcome.family) {
+                 std::abort();
+            }
             loglik += outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra).log_likelihood;
         }
     }
@@ -1808,11 +1821,6 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
     const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
 
-    {
-        std::ofstream debug_log("data/debug_semx_driver_entry.log", std::ios::app);
-        debug_log << "Driver entry. extra_param_mappings size: " << extra_param_mappings.size() << std::endl;
-    }
-
     std::unordered_map<std::string, double> gradients;
     double total_loglik = 0.0;
 
@@ -1875,6 +1883,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 }
                 double s = status_vec ? (*status_vec)[i] : 1.0;
                 const double dispersion_value = shared_dispersion ? shared_dispersion_value : disps[i];
+                
                 auto eval = family->evaluate(obs[i], preds[i], dispersion_value, s, ep);
                 total_loglik += eval.log_likelihood;
                 double d_lp = eval.first_derivative; // d(loglik)/d(eta)
@@ -1967,17 +1976,15 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         }
     }
 
-    {
-        std::ofstream debug_log("data/debug_semx_driver_vars.log", std::ios::app);
-        debug_log << "all_outcome_vars size: " << all_outcome_vars.size() << std::endl;
-        for(const auto& v : all_outcome_vars) debug_log << "  " << v << std::endl;
-    }
-
     std::string obs_var_name;
     std::string obs_family_name;
     if (!all_outcome_vars.empty()) {
         obs_var_name = all_outcome_vars[0];
         auto it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v){ return v.name == obs_var_name; });
+        
+        if (it == model.variables.end()) {
+             throw std::runtime_error("Outcome variable not found in model variables: " + obs_var_name);
+        }
         obs_family_name = it->family;
     } else {
         for (const auto& var : model.variables) {
@@ -2579,6 +2586,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     }
 
     LaplaceSystemResult laplace_result;
+    
     if (!solve_laplace_system(system,
                               outcomes,
                               laplace_result)) {
@@ -2722,8 +2730,6 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
 
     // Gradients for extra parameters (thresholds)
     if (!extra_param_mappings.empty()) {
-        std::ofstream debug_log("data/debug_semx_driver.log", std::ios::app);
-        debug_log << "Processing extra param mappings for " << extra_param_mappings.size() << " variables." << std::endl;
         
         std::size_t eval_offset_extra = 0;
         for (const auto& outcome : outcomes) {
@@ -2732,7 +2738,6 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
             
             if (map_it != extra_param_mappings.end()) {
                 const auto& param_ids = map_it->second;
-                debug_log << "  Outcome " << outcome.name << " has " << param_ids.size() << " extra params." << std::endl;
                 
                 // We need quad_terms
                 auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
@@ -2758,9 +2763,60 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
             }
             eval_offset_extra += n_outcome;
         }
-    } else {
-         std::ofstream debug_log("data/debug_semx_driver.log", std::ios::app);
-         debug_log << "extra_param_mappings is empty!" << std::endl;
+    }
+
+    // Gradients for design matrix (loadings)
+    if (!data_param_mappings.empty()) {
+        std::size_t eval_offset_data = 0;
+        const std::size_t Q = system.total_dim;
+        
+        for (const auto& outcome : outcomes) {
+            std::size_t n_outcome = outcome.obs.size();
+            
+            for (std::size_t i = 0; i < n_outcome; ++i) {
+                const auto& eval = laplace_result.evaluations[eval_offset_data + i];
+                std::size_t global_obs_idx = eval_offset_data + i;
+                
+                if (global_obs_idx >= system.observation_entries.size()) continue;
+                
+                for (const auto& entry : system.observation_entries[global_obs_idx]) {
+                    const auto& block = system.blocks[entry.block_index];
+                    const auto& info = *block.info;
+                    
+                    bool has_mapped = false;
+                    for(const auto& v : info.design_vars) {
+                        if(data_param_mappings.count(v)) { has_mapped = true; break; }
+                    }
+                    if (!has_mapped) continue;
+                    
+                    const double* z_row = &block.design_matrix[entry.row_index * block.q];
+                    
+                    for (std::size_t c = 0; c < block.q; ++c) {
+                        const std::string& var_name = info.design_vars[c];
+                        auto map_it = data_param_mappings.find(var_name);
+                        if (map_it != data_param_mappings.end()) {
+                            const auto& mapping = map_it->second;
+                            size_t idx = i % mapping.stride;
+                            if (idx < mapping.pattern.size()) {
+                                const std::string& pid = mapping.pattern[idx];
+                                if (!pid.empty()) {
+                                    double term1 = eval.first_derivative * laplace_result.u[block.offset + c];
+                                    
+                                    double term2_inner = 0.0;
+                                    for (std::size_t r = 0; r < block.q; ++r) {
+                                        term2_inner += neg_hess_inv[(block.offset + c) * Q + (block.offset + r)] * z_row[r];
+                                    }
+                                    double term2 = eval.second_derivative * term2_inner;
+                                    
+                                    gradients[pid] += term1 + term2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            eval_offset_data += n_outcome;
+        }
     }
 
     return {total_loglik, gradients};
@@ -2933,8 +2989,11 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
                                          EstimationMethod method,
                                          const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
     
+    std::cerr << "LikelihoodDriver::fit start" << std::endl;
     ModelObjective objective(*this, model, data, fixed_covariance_data, status, method, extra_param_mappings);
+    std::cerr << "ModelObjective created" << std::endl;
     auto initial_params = objective.initial_parameters();
+    std::cerr << "Initial params count: " << initial_params.size() << std::endl;
     
     std::unique_ptr<Optimizer> optimizer;
     if (optimizer_name == "lbfgs") {
@@ -3002,12 +3061,6 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
             Eigen::MatrixXd hessian = compute_hessian(objective, result.parameters);
             std::cerr << "Hessian:\n" << hessian << std::endl;
             
-            std::ofstream debug_file("hessian_debug.txt");
-            if (debug_file.is_open()) {
-                debug_file << "Hessian:\n" << hessian << std::endl;
-                debug_file.close();
-            }
-
             // Hessian of NLL is Fisher Information. Covariance is Inverse.
             Eigen::MatrixXd vcov_unconstrained = hessian.inverse();
             

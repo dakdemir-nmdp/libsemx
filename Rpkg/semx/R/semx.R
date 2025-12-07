@@ -684,6 +684,7 @@ semx_model <- function(equations, families, kinds = NULL, covariances = NULL, ge
 #' @return A FitResult object.
 #' @export
 semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixed_covariance_data = NULL, estimation_method = "ML") {
+    print("semx_fit called")
     if (!inherits(model, "semx_model")) {
         stop("model must be a semx_model object")
     }
@@ -890,7 +891,9 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
         }
     }
     
+    print("Creating LikelihoodDriver...")
     driver <- new(LikelihoodDriver)
+    print("LikelihoodDriver created.")
 
     status_data <- list()
     if (!is.null(model$status_vars)) {
@@ -921,6 +924,7 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
         }
     }
 
+    print("Calling driver$fit...")
     result <- if (length(merged_fixed) > 0L && length(status_data) > 0L) {
         driver$fit_with_fixed_and_status(model$ir, data, options, optimizer_name, merged_fixed, status_data, extra_param_mappings, method_code)
     } else if (length(merged_fixed) > 0L) {
@@ -930,6 +934,7 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
     } else {
         driver$fit(model$ir, data, options, optimizer_name, extra_param_mappings, method_code)
     }
+    print("driver$fit returned.")
 
     opt_res <- result$optimization_result
     opt_res_list <- list(

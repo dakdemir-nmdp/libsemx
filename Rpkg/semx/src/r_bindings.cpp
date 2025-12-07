@@ -298,24 +298,29 @@ Rcpp::List LikelihoodDriver_evaluate_model_gradient(LikelihoodDriver* driver,
 FitResult LikelihoodDriver_fit(LikelihoodDriver* driver,
                                         ModelIR* model,
                                         Rcpp::List data,
-                                        OptimizationOptions options,
+                                        OptimizationOptions* options,
                                         std::string optimizer_name,
                                         Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                         int method) {
-    return driver->fit(*model, list_to_map(data), options, optimizer_name, {}, {}, static_cast<EstimationMethod>(method), list_to_string_vector_map(extra_param_mappings));
+    Rcpp::Rcerr << "LikelihoodDriver_fit wrapper called" << std::endl;
+    auto data_map = list_to_map(data);
+    Rcpp::Rcerr << "Data map created, size: " << data_map.size() << std::endl;
+    auto extra_map = list_to_string_vector_map(extra_param_mappings);
+    Rcpp::Rcerr << "Extra map created" << std::endl;
+    return driver->fit(*model, data_map, *options, optimizer_name, {}, {}, static_cast<EstimationMethod>(method), extra_map);
 }
 
 FitResult LikelihoodDriver_fit_with_fixed(LikelihoodDriver* driver,
                                                    ModelIR* model,
                                                    Rcpp::List data,
-                                                   OptimizationOptions options,
+                                                   OptimizationOptions* options,
                                                    std::string optimizer_name,
                                                    Rcpp::Nullable<Rcpp::List> fixed_covariance_data,
                                                    Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                                    int method) {
     return driver->fit(*model,
                        list_to_map(data),
-                       options,
+                       *options,
                        optimizer_name,
                        list_to_matrix_map(fixed_covariance_data),
                        {},
@@ -326,18 +331,18 @@ FitResult LikelihoodDriver_fit_with_fixed(LikelihoodDriver* driver,
 FitResult LikelihoodDriver_fit_with_status(LikelihoodDriver* driver,
                                         ModelIR* model,
                                         Rcpp::List data,
-                                        OptimizationOptions options,
+                                        OptimizationOptions* options,
                                         std::string optimizer_name,
                                         Rcpp::List status,
                                         Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                         int method) {
-    return driver->fit(*model, list_to_map(data), options, optimizer_name, {}, list_to_map(status), static_cast<EstimationMethod>(method), list_to_string_vector_map(extra_param_mappings));
+    return driver->fit(*model, list_to_map(data), *options, optimizer_name, {}, list_to_map(status), static_cast<EstimationMethod>(method), list_to_string_vector_map(extra_param_mappings));
 }
 
 FitResult LikelihoodDriver_fit_with_fixed_and_status(LikelihoodDriver* driver,
                                                    ModelIR* model,
                                                    Rcpp::List data,
-                                                   OptimizationOptions options,
+                                                   OptimizationOptions* options,
                                                    std::string optimizer_name,
                                                    Rcpp::Nullable<Rcpp::List> fixed_covariance_data,
                                                    Rcpp::List status,
@@ -345,7 +350,7 @@ FitResult LikelihoodDriver_fit_with_fixed_and_status(LikelihoodDriver* driver,
                                                    int method) {
     return driver->fit(*model,
                        list_to_map(data),
-                       options,
+                       *options,
                        optimizer_name,
                        list_to_matrix_map(fixed_covariance_data),
                        list_to_map(status),

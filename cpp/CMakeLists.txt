@@ -18,6 +18,7 @@ add_library(libsemx STATIC
     src/libsemx/parameter_transform.cpp
     src/libsemx/parameter_catalog.cpp
     src/libsemx/covariance_structure.cpp
+    src/libsemx/mixed_outcome.cpp
     src/libsemx/kronecker_covariance.cpp
     src/libsemx/genomic_kernel.cpp
     src/libsemx/fixed_covariance.cpp

@@ -1,93 +1,84 @@
-# Validation script for Mixed Outcome SEM (Gaussian + Ordinal)
-# This script tests if we can estimate a factor model with both continuous and ordinal indicators.
-
 library(semx)
+library(lme4)
 library(testthat)
 
-cat("\n--- Test: Mixed Outcome SEM (Gaussian + Ordinal) ---\n")
+# Helper to capture results
+results <- list()
 
-# 1. Generate Data
-set.seed(123)
-N <- 2000
-# True model:
-# F ~ N(0, 1)
-# y1 = 1.0*F + e1, e1 ~ N(0, 1)
-# y2* = 0.8*F + e2, e2 ~ N(0, 1)
-# y3 = 0.9*F + e3, e3 ~ N(0, 1)
-# y2 = cut(y2*) at -0.5, 0.5
+cat("\n--- Test: Mixed Path Analysis (Mediation) with Random Effects ---\n")
+cat("Model: X -> M (Gaussian) -> Y (Binomial)\n")
+cat("       M ~ X + (1|g)\n")
+cat("       Y ~ M + X + (1|g)\n")
 
-F_true <- rnorm(N, 0, 1)
-y1 <- 1.0 * F_true + rnorm(N, 0, 1)
-y3 <- 0.9 * F_true + rnorm(N, 0, 1)
-y2_star <- 0.8 * F_true + rnorm(N, 0, 1)
+set.seed(2025)
+n_groups <- 50
+n_per_group <- 20
+N <- n_groups * n_per_group
+g <- factor(rep(1:n_groups, each = n_per_group))
+x <- rnorm(N)
 
-# Cut y2 into 3 categories
-y2 <- cut(y2_star, breaks = c(-Inf, -0.5, 0.5, Inf), labels = FALSE)
-y2 <- as.ordered(y2)
+# 1. Mediator (Gaussian)
+# M = 0.5*X + u_M[g] + e_M
+u_M <- rnorm(n_groups, sd = 0.8)
+M <- 0.5 * x + u_M[g] + rnorm(N, sd = 1.0)
 
-data <- data.frame(y1 = y1, y2 = y2, y3 = y3)
+# 2. Outcome (Binomial)
+# Y ~ Binomial(logit(eta))
+# eta = -1 + 0.8*M + 0.3*X + u_Y[g]
+u_Y <- rnorm(n_groups, sd = 0.6)
+eta_Y <- -1.0 + 0.8 * M + 0.3 * x + u_Y[g]
+prob_Y <- plogis(eta_Y)
+Y <- rbinom(N, 1, prob_Y)
 
-# 2. Define Model
-# We need 3 indicators for identification of a 1-factor model
-# Free the first loading (NA*y1) because we fix Factor variance to 1
-# Fix intercept of ordinal variable y2 to 0 for identification (since we estimate thresholds)
-model_syntax <- "
-  F =~ NA*y1 + y2 + y3
-  y1 ~~ y1
-  y3 ~~ y3
-  y2 ~~ 1*y2  # Fix residual variance for ordinal
-  F ~~ 1*F    # Fix factor variance for scale
-  y2 ~ 0*1    # Fix intercept to 0
-"
+df_med <- data.frame(x = x, M = M, Y = Y, g = g)
 
-# 3. Fit Model
-cat("Fitting model...\n")
+# --- Fit Stepwise Models (lme4) ---
+cat("Fitting lme4 models...\n")
+fit_lmer_M <- lmer(M ~ x + (1 | g), data = df_med, REML = FALSE)
+fit_glmer_Y <- glmer(Y ~ M + x + (1 | g), data = df_med, family = binomial)
 
-# Define families explicitly
-families <- c(
-  y1 = "gaussian",
-  y2 = "ordinal",
-  y3 = "gaussian"
+ll_lme4_M <- as.numeric(logLik(fit_lmer_M))
+ll_lme4_Y <- as.numeric(logLik(fit_glmer_Y))
+ll_lme4_total <- ll_lme4_M + ll_lme4_Y
+
+cat(sprintf("lme4 M LogLik: %.4f\n", ll_lme4_M))
+cat(sprintf("lme4 Y LogLik: %.4f\n", ll_lme4_Y))
+cat(sprintf("Total lme4 LogLik: %.4f\n", ll_lme4_total))
+
+# --- Fit Joint Model (semx) ---
+cat("Fitting semx joint model...\n")
+
+model_semx <- semx_model(
+  equations = c(
+    "M ~ 1 + x + (1 | g)",
+    "Y ~ 1 + M + x + (1 | g)"
+  ),
+  families = c(M = "gaussian", Y = "binomial")
 )
 
-# Parse model
-# Split syntax into lines and remove comments
-equations <- strsplit(model_syntax, "\n")[[1]]
-equations <- sub("#.*", "", equations) # Remove inline comments
-equations <- trimws(equations)
-equations <- equations[nzchar(equations)]
+# Note: We expect semx to handle the dependency Y ~ M correctly.
+fit_semx <- semx_fit(model_semx, df_med, estimation_method = "ML")
+ll_semx <- -fit_semx$optimization_result$objective_value
 
-model <- semx_model(equations, families = families)
-fit <- semx_fit(model, data)
+cat(sprintf("SEMX Joint LogLik: %.4f\n", ll_semx))
 
-# Inspect Results
-print(fit)
-cat("Full Parameter Table:\n")
-print(fit$parameters)
-summary(fit)
+# Compare LogLik
+# Should be very close as the joint likelihood factorizes
+expect_equal(ll_semx, ll_lme4_total, tolerance = 0.1)
 
-# Check estimates
-summ <- summary(fit)
-params <- summ$parameters
-params$name <- rownames(params)
+# Compare Parameters
+params <- summary(fit_semx)$parameters
 print(params)
 
-# Extract specific parameters
-lambda_y1 <- params$Estimate[params$name == "lambda_y1_on_F"]
-lambda_y2 <- params$Estimate[params$name == "lambda_y2_on_F"]
-lambda_y3 <- params$Estimate[params$name == "lambda_y3_on_F"]
-tau1 <- params$Estimate[params$name == "y2_threshold_1"]
-tau2 <- params$Estimate[params$name == "y2_threshold_2"]
+# M Parameters
+cat("\nChecking M Parameters...\n")
+expect_equal(as.numeric(params["beta_M_on_x", "Estimate"]), as.numeric(fixef(fit_lmer_M)["x"]), tolerance = 0.05)
+expect_equal(as.numeric(params["alpha_M_on__intercept", "Estimate"]), as.numeric(fixef(fit_lmer_M)["(Intercept)"]), tolerance = 0.05)
 
-cat("Lambda y1:", lambda_y1, "(Expected ~1.0)\n")
-cat("Lambda y2:", lambda_y2, "(Expected ~0.8)\n")
-cat("Lambda y3:", lambda_y3, "(Expected ~0.9)\n")
-cat("Threshold 1:", tau1, "(Expected -0.5)\n")
-cat("Threshold 2:", tau2, "(Expected 0.5)\n")
+# Y Parameters
+cat("\nChecking Y Parameters...\n")
+expect_equal(as.numeric(params["beta_Y_on_x", "Estimate"]), as.numeric(fixef(fit_glmer_Y)["x"]), tolerance = 0.05)
+expect_equal(as.numeric(params["beta_Y_on_M", "Estimate"]), as.numeric(fixef(fit_glmer_Y)["M"]), tolerance = 0.05)
+expect_equal(as.numeric(params["alpha_Y_on__intercept", "Estimate"]), as.numeric(fixef(fit_glmer_Y)["(Intercept)"]), tolerance = 0.05)
 
-# Check if SEs are finite
-if (any(is.na(params$Std.Error) | is.nan(params$Std.Error))) {
-  warning("Some Standard Errors are NaN or NA!")
-} else {
-  cat("Standard Errors are finite.\n")
-}
+cat("\nMixed Path Analysis Validation Passed!\n")

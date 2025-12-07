@@ -83,12 +83,12 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                             double heuristic = var_variances.at(edge->source) * 0.5;
                             if (heuristic > 1e-4) {
                                 init_val = heuristic;
-                                std::cout << "Override variance for " << param.id << " = " << init_val << std::endl;
+                                // std::cout << "Override variance for " << param.id << " = " << init_val << std::endl;
                             }
                         }
                     } else if (fam == "weibull" || fam == "weibull_aft" || fam == "gamma" || fam == "exponential") {
                         init_val = 1.0;
-                        std::cout << "Override shape/dispersion for " << param.id << " = " << init_val << std::endl;
+                        // std::cout << "Override shape/dispersion for " << param.id << " = " << init_val << std::endl;
                     } else {
                         // Default for others (nbinom, etc)
                         init_val = 1.0;
@@ -110,7 +110,7 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
             catalog_.register_parameter(param.id, init_val, std::move(transform));
         }
     } else {
-        std::cout << "Inferring parameters from edges" << std::endl;
+        // std::cout << "Inferring parameters from edges" << std::endl;
         for (const auto& edge : model_.edges) {
             if (edge.parameter_id.empty()) {
                 continue;
@@ -128,9 +128,9 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                 if (var_variances.count(edge.source)) {
                     init_val = var_variances.at(edge.source) * 0.5;
                     if (init_val < 1e-4) init_val = kDefaultVarianceInit;
-                    std::cout << "Init variance for " << edge.parameter_id << " (" << edge.source << ") = " << init_val << std::endl;
+                    // std::cout << "Init variance for " << edge.parameter_id << " (" << edge.source << ") = " << init_val << std::endl;
                 } else {
-                    std::cout << "No variance stats for " << edge.source << ", using default " << kDefaultVarianceInit << std::endl;
+                    // std::cout << "No variance stats for " << edge.source << ", using default " << kDefaultVarianceInit << std::endl;
                 }
 
                 if (status_.count(edge.parameter_id) && !status_.at(edge.parameter_id).empty()) {
@@ -143,11 +143,11 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                 if (edge.kind == EdgeKind::Regression && (edge.source == "_intercept" || edge.source == "1")) {
                     if (var_means.count(edge.target)) {
                         init_val = var_means.at(edge.target);
-                        std::cout << "Init intercept for " << edge.parameter_id << " (" << edge.target << ") = " << init_val << std::endl;
+                        // std::cout << "Init intercept for " << edge.parameter_id << " (" << edge.target << ") = " << init_val << std::endl;
                     }
                 } else if (edge.kind == EdgeKind::Loading) {
                     init_val = 0.8;
-                    std::cout << "Init loading for " << edge.parameter_id << " = " << init_val << std::endl;
+                    // std::cout << "Init loading for " << edge.parameter_id << " = " << init_val << std::endl;
                 }
 
                 if (status_.count(edge.parameter_id) && !status_.at(edge.parameter_id).empty()) {
@@ -269,11 +269,33 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
             covariance_parameters[mapping.id] = std::move(params);
         }
         
+        // Prepare status and extra_params for _stacked_y
+        auto local_status = status_;
+        if (sem_data_.count("_stacked_item_idx")) {
+            local_status["_stacked_y"] = sem_data_.at("_stacked_item_idx");
+        }
+
+        auto local_extra_params = build_extra_params(constrained);
+        if (extra_param_mappings_.count("_stacked_y")) {
+            const auto& param_ids = extra_param_mappings_.at("_stacked_y");
+            std::vector<double> stacked_ep;
+            stacked_ep.reserve(param_ids.size());
+            for (const auto& pid : param_ids) {
+                size_t idx = catalog_.find_index(pid);
+                if (idx != ParameterCatalog::npos) {
+                    stacked_ep.push_back(constrained[idx]);
+                } else {
+                    try { stacked_ep.push_back(std::stod(pid)); } catch(...) { stacked_ep.push_back(0.0); }
+                }
+            }
+            local_extra_params["_stacked_y"] = std::move(stacked_ep);
+        }
+
         try {
-            double ll = -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, status_, build_extra_params(constrained), fixed_covariance_data_, method_);
+            double ll = -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, local_status, local_extra_params, fixed_covariance_data_, method_);
             return ll;
         } catch (const std::runtime_error& e) {
-            std::cerr << "ModelObjective::value (SEM) exception: " << e.what() << std::endl;
+            // std::cerr << "ModelObjective::value (SEM) exception: " << e.what() << std::endl;
             return std::numeric_limits<double>::infinity();
         }
     }
@@ -428,14 +450,35 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 }
             }
 
+            std::unordered_map<std::string, std::vector<double>> sem_status = status_;
+            if (sem_mode_ && sem_data_.count("_stacked_item_idx")) {
+                sem_status["_stacked_y"] = sem_data_.at("_stacked_item_idx");
+            }
+
+            auto local_extra_params = build_extra_params(constrained);
+            if (extra_param_mappings_.count("_stacked_y")) {
+                const auto& param_ids = extra_param_mappings_.at("_stacked_y");
+                std::vector<double> stacked_ep;
+                stacked_ep.reserve(param_ids.size());
+                for (const auto& pid : param_ids) {
+                    size_t idx = catalog_.find_index(pid);
+                    if (idx != ParameterCatalog::npos) {
+                        stacked_ep.push_back(constrained[idx]);
+                    } else {
+                        try { stacked_ep.push_back(std::stod(pid)); } catch(...) { stacked_ep.push_back(0.0); }
+                    }
+                }
+                local_extra_params["_stacked_y"] = std::move(stacked_ep);
+            }
+
             value_and_grad = driver_.evaluate_model_loglik_and_gradient(
                 sem_model_,
                 sem_data_,
                 linear_predictors,
                 dispersions,
                 covariance_parameters,
-                status_,
-                build_extra_params(constrained),
+                sem_status,
+                local_extra_params,
                 fixed_covariance_data_,
                 method_,
                 data_param_mappings,
@@ -490,6 +533,19 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
     build_prediction_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
 
     std::unordered_map<std::string, LikelihoodDriver::DataParamMapping> dispersion_param_mappings;
+    std::unordered_map<std::string, LikelihoodDriver::DataParamMapping> data_param_mappings;
+
+    // Build data parameter mappings (for factor loadings in Z)
+    for (const auto& re : model_.random_effects) {
+        for (const auto& var_name : re.variables) {
+            if (catalog_.find_index(var_name) != ParameterCatalog::npos) {
+                LikelihoodDriver::DataParamMapping mapping;
+                mapping.stride = 1;
+                mapping.pattern = {var_name};
+                data_param_mappings[var_name] = mapping;
+            }
+        }
+    }
     
     if (!sem_mode_) {
         for (const auto& var : model_.variables) {
@@ -550,7 +606,7 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             build_extra_params(constrained),
             fixed_covariance_data_,
             method_,
-            {},
+            data_param_mappings,
             dispersion_param_mappings,
             mappings);
 
@@ -623,6 +679,41 @@ void ModelObjective::prepare_sem_structures() {
 
     std::vector<double> stacked_y(total_rows);
     std::vector<double> stacked_obs_idx(total_rows);
+    std::vector<double> stacked_item_idx(total_rows);
+
+    std::string stacked_family = "gaussian";
+    std::vector<std::string> stacked_extra_params;
+    bool mixed_families = false;
+    std::string first_family;
+    std::stringstream mixed_config;
+    mixed_config << "mixed";
+
+    for (size_t k = 0; k < n_outcomes; ++k) {
+        const std::string& outcome = sem_outcomes_[k];
+        auto it = std::find_if(model_.variables.begin(), model_.variables.end(), [&](const auto& v){ return v.name == outcome; });
+        std::string family = (it != model_.variables.end()) ? it->family : "gaussian";
+        
+        if (k == 0) first_family = family;
+        else if (family != first_family) mixed_families = true;
+
+        size_t param_count = 0;
+        if (extra_param_mappings_.count(outcome)) {
+            const auto& params = extra_param_mappings_.at(outcome);
+            param_count = params.size();
+            stacked_extra_params.insert(stacked_extra_params.end(), params.begin(), params.end());
+        }
+        mixed_config << ";" << family << "," << param_count;
+    }
+
+    if (n_outcomes > 1 && (mixed_families || !stacked_extra_params.empty())) {
+         stacked_family = mixed_config.str();
+         extra_param_mappings_["_stacked_y"] = stacked_extra_params;
+    } else if (n_outcomes == 1) {
+         stacked_family = first_family;
+         if (!stacked_extra_params.empty()) {
+             extra_param_mappings_["_stacked_y"] = stacked_extra_params;
+         }
+    }
     
     for (size_t k = 0; k < n_outcomes; ++k) {
         const auto& y_vec = data_.at(sem_outcomes_[k]);
@@ -630,11 +721,13 @@ void ModelObjective::prepare_sem_structures() {
             size_t row = i * n_outcomes + k;
             stacked_y[row] = y_vec[i];
             stacked_obs_idx[row] = static_cast<double>(i);
+            stacked_item_idx[row] = static_cast<double>(k);
         }
     }
     
     sem_data_["_stacked_y"] = std::move(stacked_y);
     sem_data_["_stacked_obs_idx"] = std::move(stacked_obs_idx);
+    sem_data_["_stacked_item_idx"] = std::move(stacked_item_idx);
 
     // 3. Build SEM Model IR
     sem_model_ = model_; 
@@ -642,7 +735,7 @@ void ModelObjective::prepare_sem_structures() {
     sem_model_.edges.clear(); 
     sem_model_.random_effects.clear(); 
 
-    sem_model_.variables.push_back({ "_stacked_y", VariableKind::Observed, "gaussian" });
+    sem_model_.variables.push_back({ "_stacked_y", VariableKind::Observed, stacked_family });
     sem_model_.variables.push_back({ "_stacked_obs_idx", VariableKind::Grouping, "" });
 
     // 4. Handle Latents (Random Effects) - Grouped

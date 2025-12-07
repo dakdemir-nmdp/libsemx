@@ -41,6 +41,9 @@
         - [ ] Expand multi-outcome/mixed-type coverage (Gaussian/Binomial/Poisson/Ordinal) with and without SEM structure; compare to `lavaan` for SEM cases and `nlme`/`lme4` for mixed cases.
             - [x] Fixed Joint Independent GLMM optimization (Gaussian+Binomial+Poisson) by explicit RE-Outcome linking and preventing SEM mode trigger (2025-02-24).
             - [x] Implemented Ordinal Regression support (Probit link) and validated against `MASS::polr` (2025-02-24).
+            - [x] Fixed zero-convergence of factor loadings in mixed models by implementing gradients for design matrix parameters in `LikelihoodDriver`.
+            - [x] Validated Joint Independent GLMM (Gaussian+Binomial+Poisson) against `lme4` (sum of independent log-likelihoods).
+            - [ ] Validate Mixed Path Analysis (e.g. Mediation: X -> M -> Y) with Random Effects against `lme4` (stepwise).
         - [x] Broaden genomic selection checks (GBLUP, RKHS/multi-kernel, G×E) against `sommer`, using simulated truth and precomputed kernels to validate variance components and BLUPs. (2025-02-24)
             - [x] Validated single-kernel GBLUP against `sommer` (exact match).
             - [x] GxE/Repeated Records support requires Z-matrix construction from factor variables.

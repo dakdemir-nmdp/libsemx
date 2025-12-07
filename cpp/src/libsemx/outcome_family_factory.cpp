@@ -9,6 +9,7 @@
 #include "libsemx/loglogistic_outcome.hpp"
 #include "libsemx/ordinal_outcome.hpp"
 #include "libsemx/fixed_outcome.hpp"
+#include "libsemx/mixed_outcome.hpp"
 
 #include <memory>
 #include <stdexcept>
@@ -17,6 +18,9 @@
 namespace libsemx {
 
 std::unique_ptr<OutcomeFamily> OutcomeFamilyFactory::create(const std::string& family_name) {
+    if (family_name.rfind("mixed;", 0) == 0) {
+        return std::make_unique<MixedOutcome>(family_name);
+    }
     if (family_name == "gaussian") {
         return std::make_unique<GaussianOutcome>();
     }
