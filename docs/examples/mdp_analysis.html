@@ -423,22 +423,28 @@ model &lt;- semx_model(
     )
   )
 )</code></pre>
+<pre><code>## [1] &quot;Var order: EarHT_std, _intercept, all_groups&quot;
+## [1] &quot;Var defs names: EarHT_std, _intercept, all_groups&quot;</code></pre>
 </div>
 <div id="fit-model-and-analyze-results" class="section level2">
 <h2>3. Fit Model and Analyze Results</h2>
 <pre class="r"><code># Fit the model
-fit &lt;- semx_fit(model, merged_df)
-
-# Display Summary
+fit &lt;- semx_fit(model, merged_df)</code></pre>
+<pre><code>## [1] &quot;semx_fit called&quot;
+## [1] &quot;Creating LikelihoodDriver...&quot;
+## [1] &quot;LikelihoodDriver created.&quot;
+## [1] &quot;Calling driver$fit...&quot;
+## [1] &quot;driver$fit returned.&quot;</code></pre>
+<pre class="r"><code># Display Summary
 summary(fit)</code></pre>
 <pre><code>## Optimization converged: TRUE 
-## Iterations: 25 
+## Iterations: 34 
 ## Log-likelihood: -357.404
 ## Chi-square: 720.809 (df=NA)
 ## AIC: 720.8, BIC: 731.7
 ## 
 ##                                    Estimate  Std.Error       z.value
-## alpha_EarHT_std_on__intercept -1.874249e-10 0.03011539 -6.223560e-09
+## alpha_EarHT_std_on__intercept -8.269636e-11 0.03011539 -2.745984e-09
 ## psi_EarHT_std_EarHT_std        2.530343e-01 0.08216702  3.079511e+00
 ## polygenic_0                    6.679959e-01 0.14116374  4.732064e+00
 ##                                    P.value
@@ -455,7 +461,7 @@ if (!is.null(fit$parameter_names)) {
 }
 print(params)</code></pre>
 <pre><code>## alpha_EarHT_std_on__intercept       psi_EarHT_std_EarHT_std 
-##                 -1.874249e-10                  2.530343e-01 
+##                 -8.269636e-11                  2.530343e-01 
 ##                   polygenic_0 
 ##                  6.679959e-01</code></pre>
 </div>

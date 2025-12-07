@@ -3057,9 +3057,7 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
 
     if (result.converged) {
         try {
-            std::cerr << "Computing Hessian..." << std::endl;
             Eigen::MatrixXd hessian = compute_hessian(objective, result.parameters);
-            std::cerr << "Hessian:\n" << hessian << std::endl;
             
             // Hessian of NLL is Fisher Information. Covariance is Inverse.
             Eigen::MatrixXd vcov_unconstrained = hessian.inverse();

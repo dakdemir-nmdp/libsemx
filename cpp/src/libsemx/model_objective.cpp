@@ -324,9 +324,6 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
 double ModelObjective::value_and_gradient(const std::vector<double>& parameters, std::vector<double>& grad) const {
     const auto constrained = to_constrained(parameters);
     
-    std::ofstream debug_log("data/debug_semx_objective.log", std::ios::app);
-    debug_log << "value_and_gradient called. sem_mode_: " << (sem_mode_ ? "true" : "false") << std::endl;
-
     if (sem_mode_) {
         update_sem_data(constrained);
         std::unordered_map<std::string, std::vector<double>> linear_predictors;
@@ -362,6 +359,32 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                         const auto& src_vec = data_.at(edge.source);
                         for (size_t i = 0; i < n_obs; ++i) {
                             lp[i * n_outcomes + outcome_idx] += src_vec[i] * weight;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle SEM-specific regression edges (e.g. latent means)
+        for (const auto& edge : sem_model_.edges) {
+            if (edge.kind == EdgeKind::Regression && edge.target == "_stacked_y") {
+                double weight = 0.0;
+                if (!edge.parameter_id.empty()) {
+                    size_t idx = catalog_.find_index(edge.parameter_id);
+                    if (idx != ParameterCatalog::npos) {
+                        weight = constrained[idx];
+                    } else {
+                        try { weight = std::stod(edge.parameter_id); } catch(...) {}
+                    }
+                } else {
+                    try { weight = std::stod(edge.parameter_id); } catch(...) {}
+                }
+
+                if (sem_data_.count(edge.source)) {
+                    const auto& src_vec = sem_data_.at(edge.source);
+                    if (src_vec.size() == lp.size()) {
+                        for(size_t i=0; i<src_vec.size(); ++i) {
+                            lp[i] += src_vec[i] * weight;
                         }
                     }
                 }
@@ -442,14 +465,6 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 mappings[k] = v;
             }
 
-            {
-                std::ofstream debug_log("data/debug_semx_objective_call.log", std::ios::app);
-                debug_log << "Calling driver with " << mappings.size() << " extra param mappings." << std::endl;
-                for(const auto& [k, v] : mappings) {
-                    debug_log << "  " << k << ": " << v.size() << " params" << std::endl;
-                }
-            }
-
             std::unordered_map<std::string, std::vector<double>> sem_status = status_;
             if (sem_mode_ && sem_data_.count("_stacked_item_idx")) {
                 sem_status["_stacked_y"] = sem_data_.at("_stacked_item_idx");
@@ -485,8 +500,8 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 dispersion_param_mappings,
                 mappings
             );
-        } catch (const std::runtime_error& e) {
-            std::cerr << "ModelObjective::value_and_gradient (SEM) exception: " << e.what() << std::endl;
+        } catch (const std::exception& e) {
+            // std::cerr << "ModelObjective::value_and_gradient (SEM) exception: " << e.what() << std::endl;
             grad.assign(parameters.size(), 0.0);
             return std::numeric_limits<double>::infinity();
         }
@@ -748,6 +763,29 @@ void ModelObjective::prepare_sem_structures() {
             std::string loading_var = "_loading_" + latent;
             sem_data_[loading_var] = std::vector<double>(total_rows, 0.0);
             re_vars.push_back(loading_var);
+
+            // Handle Latent Means (Intercepts)
+            for (const auto& edge : model_.edges) {
+                if (edge.kind == EdgeKind::Regression && edge.target == latent && 
+                   (edge.source == "_intercept" || edge.source == "1")) {
+                    
+                    sem_model_.edges.push_back({
+                        EdgeKind::Regression,
+                        loading_var,
+                        "_stacked_y",
+                        edge.parameter_id
+                    });
+                    
+                    bool exists = false;
+                    for(const auto& v : sem_model_.variables) {
+                        if (v.name == loading_var) { exists = true; break; }
+                    }
+                    if (!exists) {
+                        sem_model_.variables.push_back({ loading_var, VariableKind::Observed, "" });
+                    }
+                    break;
+                }
+            }
             
             // Collect loading infos
             for (size_t k = 0; k < n_outcomes; ++k) {
@@ -774,6 +812,13 @@ void ModelObjective::prepare_sem_structures() {
                              info.param_index = ParameterCatalog::npos;
                              info.fixed_value = 0.0;
                         }
+
+                        if (info.param_index == ParameterCatalog::npos) {
+                             for(size_t i=0; i < n_obs; ++i) {
+                                 sem_data_[loading_var][i * n_outcomes + k] = info.fixed_value;
+                             }
+                        }
+
                         loading_infos_.push_back(info);
                     }
                 }
@@ -792,6 +837,14 @@ void ModelObjective::prepare_sem_structures() {
         re.variables = re_vars;
         re.covariance_id = cov_id;
         sem_model_.random_effects.push_back(re);
+
+        // Add regression edge from random effect to stacked outcome
+        sem_model_.edges.push_back({
+            EdgeKind::Regression,
+            "_re_latents",
+            "_stacked_y",
+            ""
+        });
 
         // Build Covariance Mapping
         SemCovarianceMapping mapping;

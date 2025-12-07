@@ -957,6 +957,7 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
             standard_errors = se,
             vcov = result$vcov,
             parameter_names = result$parameter_names,
+            covariance_matrices = result$covariance_matrices,
             aic = result$aic,
             bic = result$bic,
             chi_square = result$chi_square,
@@ -971,6 +972,155 @@ semx_fit <- function(model, data, options = NULL, optimizer_name = "lbfgs", fixe
         ),
         class = "semx_fit"
     )
+}
+
+#' Extract variance components
+#'
+#' @param fit A semx_fit object.
+#' @return A data.frame with variance components.
+#' @export
+semx_variance_components <- function(fit) {
+  if (!inherits(fit, "semx_fit")) stop("fit must be a semx_fit object")
+  
+  rows <- list()
+  
+  cov_matrices <- fit$covariance_matrices
+  if (is.null(cov_matrices)) return(data.frame())
+  
+  # Map covariance_id to random effect info
+  re_map <- list()
+  if (!is.null(fit$model$random_effects)) {
+    for (re in fit$model$random_effects) {
+      re_map[[re$covariance]] <- re
+    }
+  }
+  
+  for (cov_id in names(cov_matrices)) {
+    if (is.null(re_map[[cov_id]])) next
+    
+    re <- re_map[[cov_id]]
+    variables <- re$variables
+    if (length(variables) == 0) next
+    
+    group <- variables[[1]]
+    design_vars <- if (length(variables) > 1) variables[-1] else character()
+    
+    # Handle implicit intercept for (1 | group)
+    if (length(design_vars) == 0) {
+        # Check matrix dimension
+        mat_vec <- cov_matrices[[cov_id]]
+        if (length(mat_vec) == 1) {
+            design_vars <- c("(Intercept)")
+        }
+    }
+    
+    dim <- length(design_vars)
+    mat_vec <- cov_matrices[[cov_id]]
+    
+    if (length(mat_vec) != dim * dim) next
+    
+    mat <- matrix(mat_vec, nrow = dim, ncol = dim, byrow = TRUE) # C++ is row-major
+    
+    sds <- sqrt(diag(mat))
+    sds_safe <- sds
+    sds_safe[sds_safe == 0] <- 1.0
+    corrs <- mat / outer(sds_safe, sds_safe)
+    
+    for (i in seq_along(design_vars)) {
+      var1 <- design_vars[i]
+      
+      # Variance row
+      rows[[length(rows) + 1]] <- list(
+        Group = group,
+        Name1 = var1,
+        Name2 = "",
+        Variance = mat[i, i],
+        Std.Dev = sds[i],
+        Corr = NA_real_
+      )
+      
+      # Correlation rows
+      if (i < dim) {
+        for (j in (i + 1):dim) {
+          var2 <- design_vars[j]
+          rows[[length(rows) + 1]] <- list(
+            Group = group,
+            Name1 = var1,
+            Name2 = var2,
+            Variance = mat[i, j],
+            Std.Dev = NA_real_,
+            Corr = corrs[i, j]
+          )
+        }
+      }
+    }
+  }
+  
+  if (length(rows) == 0) {
+    return(data.frame(
+      Group = character(),
+      Name1 = character(),
+      Name2 = character(),
+      Variance = numeric(),
+      Std.Dev = numeric(),
+      Corr = numeric(),
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  do.call(rbind, lapply(rows, as.data.frame, stringsAsFactors = FALSE))
+}
+
+#' Extract covariance weights
+#'
+#' @param fit A semx_fit object.
+#' @param cov_id Covariance identifier.
+#' @return A list with sigma_sq and weights, or NULL.
+#' @export
+semx_covariance_weights <- function(fit, cov_id) {
+  if (!inherits(fit, "semx_fit")) stop("fit must be a semx_fit object")
+  
+  # Find covariance spec
+  cov_spec <- NULL
+  for (c in fit$model$covariances) {
+    if (c$name == cov_id) {
+      cov_spec <- c
+      break
+    }
+  }
+  
+  if (is.null(cov_spec)) stop(sprintf("Covariance '%s' not found in model", cov_id))
+  
+  if (is.null(cov_spec$structure) || cov_spec$structure != "multi_kernel_simplex") {
+    return(NULL)
+  }
+  
+  params <- fit$optimization_result$parameters
+  names(params) <- fit$parameter_names
+  
+  prefix <- paste0(cov_id, "_")
+  relevant_keys <- grep(paste0("^", prefix), names(params), value = TRUE)
+  
+  if (length(relevant_keys) == 0) return(NULL)
+  
+  # Sort by index
+  indices <- as.integer(sub(prefix, "", relevant_keys))
+  sorted_keys <- relevant_keys[order(indices)]
+  
+  if (length(sorted_keys) < 2) return(NULL)
+  
+  sigma_sq <- params[[sorted_keys[1]]]
+  thetas <- unname(params[sorted_keys[-1]])
+  
+  max_theta <- max(thetas)
+  exps <- exp(thetas - max_theta)
+  sum_exps <- sum(exps)
+  weights <- exps / sum_exps
+  
+  list(
+    sigma_sq = sigma_sq,
+    weights = weights
+  )
 }
 
 #' @export
@@ -1029,8 +1179,20 @@ summary.semx_fit <- function(object, ...) {
   
   res <- list(
     parameters = param_table,
-    fit_indices = fit_indices
+    fit_indices = fit_indices,
+    variance_components = semx_variance_components(object),
+    covariance_weights = list()
   )
+  
+  # Collect covariance weights
+  for (cov in object$model$covariances) {
+      if (!is.null(cov$structure) && cov$structure == "multi_kernel_simplex") {
+          w <- semx_covariance_weights(object, cov$name)
+          if (!is.null(w)) {
+              res$covariance_weights[[cov$name]] <- w
+          }
+      }
+  }
   
   class(res) <- "summary.semx_fit"
   res
@@ -1063,6 +1225,24 @@ print.summary.semx_fit <- function(x, ...) {
   cat(sprintf("AIC: %.1f, BIC: %.1f\n\n", x$fit_indices$aic, x$fit_indices$bic))
   
   print(x$parameters, ...)
+  
+  if (!is.null(x$variance_components) && nrow(x$variance_components) > 0) {
+      cat("\nVariance Components:\n")
+      print(x$variance_components, row.names = FALSE)
+  }
+  
+  if (!is.null(x$covariance_weights) && length(x$covariance_weights) > 0) {
+      for (cov_id in names(x$covariance_weights)) {
+          w <- x$covariance_weights[[cov_id]]
+          cat(sprintf("\nCovariance Weights for '%s':\n", cov_id))
+          cat(sprintf("  Sigma^2: %.4f\n", w$sigma_sq))
+          cat("  Weights:\n")
+          for (i in seq_along(w$weights)) {
+              cat(sprintf("    Kernel %d: %.4f\n", i, w$weights[i]))
+          }
+      }
+  }
+  
   invisible(x)
 }
 
@@ -1106,7 +1286,7 @@ predict.semx_fit <- function(object, newdata = NULL, ...) {
 }
 
 #' @export
-plot.semx_fit <- function(x, ...) {
+plot.semx_fit <- function(x, type = "residuals", ...) {
   preds <- predict(x)
   data <- x$data
   
@@ -1116,8 +1296,15 @@ plot.semx_fit <- function(x, ...) {
       y_hat <- preds[[target]]
       resid <- y - y_hat
       
-      plot(y_hat, resid, main = paste("Residuals vs Fitted:", target), xlab = "Fitted", ylab = "Residuals", ...)
-      abline(h = 0, col = "red", lty = 2)
+      if (type == "residuals") {
+          plot(y_hat, resid, main = paste("Residuals vs Fitted:", target), xlab = "Fitted", ylab = "Residuals", ...)
+          abline(h = 0, col = "red", lty = 2)
+      } else if (type == "qq") {
+          qqnorm(resid, main = paste("Normal Q-Q Plot:", target), ...)
+          qqline(resid, col = "red")
+      } else {
+          stop(sprintf("Unknown plot type: %s", type))
+      }
     }
   }
 }

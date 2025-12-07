@@ -1,9 +1,9 @@
 # libsemx TODO
 
 ## Active
-- [ ] Fix Documentation Examples
+- [x] Fix Documentation Examples
     - [x] Fix `docs/examples/mdp_analysis.Rmd` rendering issue (convert grouping variable to numeric).
-- [ ] Validation & Benchmarking against established software.
+- [x] Validation & Benchmarking against established software.
     - [x] Create Python notebook comparing `libsemx` GLMM results with `statsmodels`/`lme4`.
     - [x] Create R notebook comparing `libsemx` SEM/GLMM results with `lavaan`/`lme4`.
         - [x] Implemented `ExplicitCovariance` to support standard SEM parameterization (elements of $\Sigma$).
@@ -29,7 +29,7 @@
         - [x] Validated LogLik, Coefficients, and Shape/Scale parameters.
         - [x] Fixed initialization of Weibull shape parameter to avoid numerical instability (2025-02-24).
         - [x] Fixed implicit intercept handling in R frontend to match `survreg` behavior (2025-02-24).
-    - [ ] Phase 2: Exhaustive validation grid (ML/REML) vs `lm`/`glm`/`lme4`/`nlme`/`sommer`.
+    - [x] Phase 2: Exhaustive validation grid (ML/REML) vs `lm`/`glm`/`lme4`/`nlme`/`sommer`.
         - [x] Add simulated and empirical LM/GLM/GLMM fixtures (binomial/poisson/NB) with and without random effects; compare coefficients, dispersions, and log-likelihoods to `glm`/`glmer`.
             - [x] Created `validation/validate_glm_families.R` to compare Binomial, Poisson, Negative Binomial, and Binomial GLMM.
             - [x] Validated LogLik and Coefficients against `glm`, `MASS::glm.nb`, and `lme4::glmer`.
@@ -38,12 +38,18 @@
         - [x] Cross-check Toeplitz covariance parameters against simulation.
         - [x] Cross-check factor-analytic covariance parameters against simulation.
         - [x] Validate ML vs REML parity for Gaussian LMMs across `lme4`, `nlme`, and `libsemx` (fixed-only, random-only, and mixed models).
-        - [ ] Expand multi-outcome/mixed-type coverage (Gaussian/Binomial/Poisson/Ordinal) with and without SEM structure; compare to `lavaan` for SEM cases and `nlme`/`lme4` for mixed cases.
+        - [x] Expand multi-outcome/mixed-type coverage (Gaussian/Binomial/Poisson/Ordinal) with and without SEM structure; compare to `lavaan` for SEM cases and `nlme`/`lme4` for mixed cases.
             - [x] Fixed Joint Independent GLMM optimization (Gaussian+Binomial+Poisson) by explicit RE-Outcome linking and preventing SEM mode trigger (2025-02-24).
             - [x] Implemented Ordinal Regression support (Probit link) and validated against `MASS::polr` (2025-02-24).
             - [x] Fixed zero-convergence of factor loadings in mixed models by implementing gradients for design matrix parameters in `LikelihoodDriver`.
             - [x] Validated Joint Independent GLMM (Gaussian+Binomial+Poisson) against `lme4` (sum of independent log-likelihoods).
-            - [ ] Validate Mixed Path Analysis (e.g. Mediation: X -> M -> Y) with Random Effects against `lme4` (stepwise).
+            - [x] Validate Mixed Path Analysis (e.g. Mediation: X -> M -> Y) with Random Effects against `lme4` (stepwise).
+                - [x] Created `validation/validate_mixed_sem.R`.
+                - [x] Validated parameters and LogLik for Gaussian Mediator + Binomial Outcome with Random Intercepts.
+            - [x] Validate Latent Growth Curve Model against `lavaan`.
+                - [x] Fixed latent mean estimation (intercepts) by correctly mapping `_intercept -> latent` edges to fixed effects on loading vectors.
+            - [x] Validate Ordinal CFA against `lavaan` (ML/Integration).
+            - [x] Validate Mixed CFA (Continuous + Ordinal indicators) against `lavaan`.
         - [x] Broaden genomic selection checks (GBLUP, RKHS/multi-kernel, G×E) against `sommer`, using simulated truth and precomputed kernels to validate variance components and BLUPs. (2025-02-24)
             - [x] Validated single-kernel GBLUP against `sommer` (exact match).
             - [x] GxE/Repeated Records support requires Z-matrix construction from factor variables.
@@ -55,6 +61,11 @@
             - [x] Verified parameter recovery within tolerance (GLMM variances required relaxed tolerance due to Laplace approximation bias).
 
 ## Completed
+- [x] Align R bindings with Python (variance components, covariance weights, Q-Q plots). (2025-12-07)
+    - [x] Implemented `semx_variance_components` and `semx_covariance_weights` in R.
+    - [x] Updated `summary.semx_fit` and `print.summary.semx_fit` to display these components.
+    - [x] Updated `plot.semx_fit` to support Q-Q plots (`type="qq"`).
+    - [x] Verified with `Rpkg/semx/tests/testthat/test-summary-enhancements.R`.
 - [x] Fix crash in `validation/comparison.Rmd` by defaulting unstructured covariance diagonal to 1.0 when unspecified. (2025-02-24)
 - [x] Fix `ModelObjective` initialization to respect `status` map for covariance parameters. (2025-02-24)
 - [x] Extend SEM branch to honor full structural model. (2025-12-02)
@@ -189,145 +200,3 @@
 	- [x] Add integration tests proving Python/R front-ends round-trip the existing Laplace, Kronecker, and survival fixtures through the bindings.
 	- [x] Update documentation/examples to walk through the new APIs and ensure CI instructions reference the front-end tests (python/README.md, docs/examples/formula_frontend.md). (2025-12-15)
 		- Front-end parser tests: `PYTHONPATH=build uv run pytest python/semx/tests -k model_api`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat', filter = 'bindings')"` (2025-12-15)
-- [x] Validate Ordinal (probit) Laplace gradients with threshold transforms so categorical families stay aligned with blueprint §§3.6 & 6.2. Tests: `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "laplace_gradient"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
-	- [x] Add a Catch2 finite-difference probe for an ordinal mixed model (3-category probit with random intercept) to guard the C++ core. (2025-12-01)
-	- [x] Mirror the ordinal gradient check through Python bindings with the same IR payload and finite differences. (2025-12-01)
-	- [x] Mirror the scenario in the R bindings via `evaluate_model_loglik_full` to keep front-ends consistent. (2025-12-01)
-- [x] Validate Negative Binomial Laplace gradients with random intercepts so non-Gaussian families beyond binomial stay covered; leverage blueprint §§3.6 & 6.3 for derivative expectations. Tests: `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k "laplace_gradient"`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
-	- [x] Add a Catch2 finite-difference gradient probe for a negative-binomial mixed model (random intercept) to guard the C++ core. (2025-12-01)
-	- [x] Mirror the negative-binomial gradient check through Python bindings (reusing the shared IR) with finite differences. (2025-12-01)
-	- [x] Mirror the scenario in the R bindings via `evaluate_model_loglik_full` to keep all front-ends aligned. (2025-12-01)
-- [x] Validate Kronecker Laplace gradients against finite differences so the new fixtures catch future regressions; extend blueprint §7.2 references into numerical harnesses. Tests: `ctest --test-dir build -R "Kronecker"`, `PYTHONPATH=build uv run pytest python/semx/tests -k kronecker`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
-	- [x] Add a Catch2 finite-difference probe (beta plus kernel weights) for the Kronecker+diagonal model to quantify gradient error tolerances. (2025-12-01)
-	- [x] Mirror the numeric check through Python and R smoke tests (e.g., compare analytic gradients to autograd/finite diff utilities) to keep bindings in lockstep. (2025-12-01)
-
-- [x] Validate Laplace `fit()` with correlated random slopes (unstructured q=2) so we cover off-diagonal covariance gradients; extend Catch2/Python/R fixtures accordingly per blueprint §3.3. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-01)
-	- [x] Add a Catch2 scenario that uses an unstructured 2×2 covariance for the intercept+slope random effect and asserts the optimizer reports both variances plus covariance. (2025-12-01)
-	- [x] Mirror the same correlated random-slope payload via Python/R Laplace fit tests so bindings stay aligned on parameter ordering. (2025-12-01)
-
-- [x] Stress Laplace `fit()` with Kronecker + diagonal covariance stacks so multi-kernel parameter transforms stay stable; implement Catch2/Python/R fixtures per blueprint §§3.3 & 7.2. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-05)
-	- [x] Re-read blueprint §§3.3 & 7.2 to lock down Kronecker kernel layout plus gradient expectations, then sketch the shared IR payload (traits × environments with diagonal noise). (2025-12-05)
-	- [x] Add a Catch2 Laplace scenario combining a Kronecker covariance with a diagonal effect and assert gradients for all kernel weights. (2025-12-05)
-	- [x] Mirror the Kronecker Laplace fit via Python and R bindings, keeping IR payloads identical to the C++ fixture and passing in fixed kernels via bindings. (2025-12-05)
-
-- [x] Cover Laplace `fit()` with random-slope effects (q>1) so block Hessians and parameter transforms stay stable; reuse the binomial GLMM payload but add slope columns per blueprint §3.2. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
-	- [x] Extend the Catch2 Laplace fixture to include a random effect with intercept+slope (dimension two) under a diagonal covariance and assert q>1 gradients. (2025-12-04)
-	- [x] Mirror the same IR payload through Python and R fit tests so bindings hit the same q>1 Laplace code paths. (2025-12-04)
-
-- [x] Stress-test Laplace `fit()` with mixed covariance types (diagonal + scaled-fixed) so stacked transforms stay stable; extend Catch2/Python/R fixtures accordingly. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
-	- [x] Add a Catch2 scenario mixing diagonal and scaled fixed covariances (two random effects) and assert Laplace fit convergence. (2025-12-04)
-	- [x] Mirror the same heteroskedastic random-effects payload through Python/R tests to guard binding parity. (2025-12-04)
-
-- [x] Broaden Laplace `fit()` coverage to multi-effect binomial models so the optimizer handles stacked covariance parameters; ensure ModelObjective exposes the requisite transforms through bindings. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
-	- [x] Extend the Catch2 Laplace fit fixture to include two random effects with distinct covariance structures and assert optimizer stability. (2025-12-04)
-	- [x] Add mirrored Python/R integration tests that serialize the same IR payload so we catch any binding drift for stacked Laplace parameters. (2025-12-04)
-
-- [x] Enable Laplace-aware `fit()` flows so ModelObjective can optimize binomial mixed models end-to-end with analytic gradients; tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace"`, `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"`. (2025-12-04)
-	- [x] Add a Catch2 integration test that runs `LikelihoodDriver::fit` on a Laplace (binomial) mixed model and confirms convergence with analytic gradients. (2025-12-04)
-	- [x] Mirror the same scenario via Python and R fit tests to ensure the IR/optimizer stack stays synchronized across front-ends. (2025-12-04)
-
-- [x] Extend mixed-model analytic gradients to non-Gaussian (Laplace) families and validate against finite differences across multiple random-effect structures. (2025-12-03)
-	- [x] Derive and implement analytic gradients for single-effect Laplace models (reference blueprint §6.3) reusing the Newton-mode Hessian; tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "Laplace gradients"` (2025-12-01).
-	- [x] Generalize the Laplace gradient path to multiple random effects by assembling block-aware Hessians and validating blockwise traces; tests: `ctest --test-dir build -R "Laplace"` (2025-12-02).
-	- [x] Expose Laplace gradients through ModelObjective/Python bindings and add IR-driven integration tests mirroring the Gaussian suite; tests: `PYTHONPATH=build uv run pytest python/semx/tests -k laplace`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat')"` (2025-12-03).
-- [x] Generalize Gaussian mixed-model likelihood/gradient assembly to handle multiple grouping factors via full V construction. Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "analytic gradients"`. (2025-12-01)
-- [x] Implement analytic gradients for mixed models (multiple Gaussian random effects per grouping). Tests: `cmake --build build --target libsemx_tests`, `ctest --test-dir build -R "analytic gradients"`. (2025-12-02)
-- [x] Expose fixed covariance data in LikelihoodDriver::fit and bindings. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R "fixed covariance"`. (2025-12-01)
-- [x] Extend ModelObjective to include covariance parameters in optimization. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R libsemx_tests`. (2025-12-01)
-- [x] Implement analytic gradients for ModelObjective to replace finite differences (for fixed effects). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R libsemx_tests`. (2025-12-01)
-- [x] Integrate LBFGS optimizer into LikelihoodDriver and expose to bindings. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R LikelihoodDriver`, `PYTHONPATH=build uv run pytest python/semx/tests/test_fit.py`. (2025-12-01)
-- [x] Implement Multi-Kernel covariance structure with weighted sum of kernels. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Genomic Relationship Matrix (GRM) kernel support. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement L-BFGS optimizer wrapper (using LBFGS++ or similar). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build -R LBFGSOptimizer`. (2025-12-01)
-- [x] Implement R bindings for ModelIR and LikelihoodDriver. Tests: `R CMD INSTALL ../Rpkg/semx && R -q -e "library(testthat); library(semx); test_dir('../Rpkg/semx/tests/testthat')"`. (2025-12-01)
-- [x] Implement Python bindings for ModelIR and LikelihoodDriver. Tests: `cmake -S cpp -B build`, `cmake --build build`, `PYTHONPATH=build uv run pytest python/semx/tests`. (2025-12-01)
-- [x] Implement Kronecker product covariance structure for GxE models (N-way, identification handling). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Laplace approximation for non-Gaussian random effects. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement REML for Gaussian random effects. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Ordinal outcome family (Probit link with thresholds). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Competing Risks support (Cause-specific hazards via censoring). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Survival outcome families (Weibull) with censoring support. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Gaussian ML random effects evaluation (intercepts and slopes) with covariance structures. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Draft Python package test harness scaffolding mirroring C++ fixtures (reference mission snapshot). Tests: `cd python && uv run pytest`. (2025-12-01)
-- [x] Extend LikelihoodDriver to support mixed outcome families and integrate with ModelIR for end-to-end evaluation. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement additional outcome families (Negative Binomial, Binomial) and extend factory. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement analytic derivatives for Negative Binomial outcome family. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate random effects and covariance structures into LikelihoodDriver for full mixed-model evaluation (stub: throws on random effects). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-
-- [x] Implement Kronecker product covariance structure for GxE models (N-way, identification handling). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Laplace approximation for non-Gaussian random effects. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement REML for Gaussian random effects. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Ordinal outcome family (Probit link with thresholds). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Competing Risks support (Cause-specific hazards via censoring). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Survival outcome families (Weibull) with censoring support. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement Gaussian ML random effects evaluation (intercepts and slopes) with covariance structures. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Draft Python package test harness scaffolding mirroring C++ fixtures (reference mission snapshot). Tests: `cd python && uv run pytest`. (2025-12-01)
-- [x] Extend LikelihoodDriver to support mixed outcome families and integrate with ModelIR for end-to-end evaluation. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement additional outcome families (Negative Binomial, Binomial) and extend factory. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement analytic derivatives for Negative Binomial outcome family. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate random effects and covariance structures into LikelihoodDriver for full mixed-model evaluation (stub: throws on random effects). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Draft Python package test harness scaffolding mirroring C++ fixtures (reference mission snapshot). Tests: `cd python && uv run pytest`. (2025-12-01)
-- [x] Extend LikelihoodDriver to support mixed outcome families and integrate with ModelIR for end-to-end evaluation. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement additional outcome families (Negative Binomial, Binomial) and extend factory. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement analytic derivatives for Negative Binomial outcome family. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Draft Python package test harness scaffolding mirroring C++ fixtures (reference mission snapshot). Tests: `cd python && uv run pytest`. (2025-12-01)
-- [x] Extend LikelihoodDriver to support mixed outcome families and integrate with ModelIR for end-to-end evaluation. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement additional outcome families (Negative Binomial, Binomial) and extend factory. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Draft Python package test harness scaffolding mirroring C++ fixtures (reference mission snapshot). Tests: `cd python && uv run pytest`. (2025-12-01)
-- [x] Extend LikelihoodDriver to support mixed outcome families and integrate with ModelIR for end-to-end evaluation. Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Draft Python package test harness scaffolding mirroring C++ fixtures (reference mission snapshot). Tests: `cd python && uv run pytest`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Integrate Gaussian outcome evaluation into preliminary likelihood driver stub (reference §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Bootstrap core scaffolding: CMake project, ModelGraph skeleton, Parameter primitive, and Catch2-based test harness (reference §§2.2, 3.1, 3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Flesh out parameter transforms for constrained optimization and integrate with `Parameter` unconstrained storage (reference §3.2). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Implement covariance structure base class with unstructured and diagonal variants (reference §3.3). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Introduce Gaussian outcome family with log-likelihood and gradient hooks (reference §3.6 & §6.1). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Design frontend IR contract for Python and R bindings (reference §2.1 and §10). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
-- [x] Outline optimizer plug-in interface (reference §2.7 and §3.8). Tests: `cmake -S cpp -B build`, `cmake --build build`, `ctest --test-dir build`. (2025-12-01)
