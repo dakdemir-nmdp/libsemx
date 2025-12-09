@@ -68,7 +68,7 @@ void ModelGraph::add_edge(EdgeKind kind, std::string source, std::string target,
     edges_.push_back(EdgeSpec{kind, std::move(source), std::move(target), std::move(parameter_id)});
 }
 
-void ModelGraph::add_covariance(std::string id, std::string structure, std::size_t dimension) {
+void ModelGraph::add_covariance(std::string id, std::string structure, std::size_t dimension, std::vector<std::string> component_ids) {
     if (id.empty()) {
         throw std::invalid_argument("covariance id must be non-empty");
     }
@@ -81,8 +81,19 @@ void ModelGraph::add_covariance(std::string id, std::string structure, std::size
     if (covariance_index_.contains(id)) {
         throw std::invalid_argument("duplicate covariance id: " + id);
     }
+
+    std::vector<CovarianceSpec> components;
+    components.reserve(component_ids.size());
+    for (const auto& comp_id : component_ids) {
+        auto it = covariance_index_.find(comp_id);
+        if (it == covariance_index_.end()) {
+            throw std::invalid_argument("covariance component not found: " + comp_id);
+        }
+        components.push_back(covariances_[it->second]);
+    }
+
     covariance_index_.emplace(id, covariances_.size());
-    covariances_.push_back(CovarianceSpec{std::move(id), std::move(structure), dimension});
+    covariances_.push_back(CovarianceSpec{std::move(id), std::move(structure), dimension, std::move(components)});
 }
 
 void ModelGraph::add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id) {

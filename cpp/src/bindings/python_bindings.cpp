@@ -18,6 +18,7 @@ PYBIND11_MODULE(_libsemx, m) {
         .value("Observed", VariableKind::Observed)
         .value("Latent", VariableKind::Latent)
         .value("Grouping", VariableKind::Grouping)
+        .value("Exogenous", VariableKind::Exogenous)
         .export_values();
 
     py::enum_<EdgeKind>(m, "EdgeKind")
@@ -72,7 +73,8 @@ PYBIND11_MODULE(_libsemx, m) {
         .def_readwrite("tli", &FitResult::tli)
         .def_readwrite("rmsea", &FitResult::rmsea)
         .def_readwrite("srmr", &FitResult::srmr)
-        .def_readwrite("covariance_matrices", &FitResult::covariance_matrices);
+        .def_readwrite("covariance_matrices", &FitResult::covariance_matrices)
+        .def_readwrite("random_effects", &FitResult::random_effects);
 
     // Post-estimation structs
     py::class_<StandardizedEdgeResult>(m, "StandardizedEdgeResult")
@@ -163,8 +165,10 @@ PYBIND11_MODULE(_libsemx, m) {
         .def("add_variable", &ModelIRBuilder::add_variable,
              py::arg("name"), py::arg("kind"), py::arg("family") = std::string(), py::arg("label") = std::string(), py::arg("measurement_level") = std::string())
         .def("add_edge", &ModelIRBuilder::add_edge)
-        .def("add_covariance", &ModelIRBuilder::add_covariance)
+        .def("add_covariance", &ModelIRBuilder::add_covariance,
+             py::arg("id"), py::arg("structure"), py::arg("dimension"), py::arg("component_ids") = std::vector<std::string>{})
         .def("add_random_effect", &ModelIRBuilder::add_random_effect)
+        .def("register_parameter", &ModelIRBuilder::register_parameter, py::arg("id"), py::arg("initial_value") = 0.0)
         .def("build", &ModelIRBuilder::build);
 
     py::class_<LikelihoodDriver::DataParamMapping>(m, "DataParamMapping")
@@ -183,7 +187,8 @@ PYBIND11_MODULE(_libsemx, m) {
              py::arg("status") = std::unordered_map<std::string, std::vector<double>>{},
              py::arg("extra_params") = std::unordered_map<std::string, std::vector<double>>{},
              py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
-             py::arg("method") = EstimationMethod::ML)
+             py::arg("method") = EstimationMethod::ML,
+             py::arg("force_laplace") = false)
             .def("evaluate_model_gradient", &LikelihoodDriver::evaluate_model_gradient,
                  py::arg("model"),
                  py::arg("data"),
@@ -196,7 +201,8 @@ PYBIND11_MODULE(_libsemx, m) {
              py::arg("method") = EstimationMethod::ML,
              py::arg("data_param_mappings") = std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>{},
              py::arg("dispersion_param_mappings") = std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>{},
-             py::arg("extra_param_mappings") = std::unordered_map<std::string, std::vector<std::string>>{})
+             py::arg("extra_param_mappings") = std::unordered_map<std::string, std::vector<std::string>>{},
+             py::arg("force_laplace") = false)
             .def("fit", &LikelihoodDriver::fit,
          py::arg("model"),
          py::arg("data"),
@@ -205,7 +211,16 @@ PYBIND11_MODULE(_libsemx, m) {
          py::arg("fixed_covariance_data") = std::unordered_map<std::string, std::vector<std::vector<double>>>{},
          py::arg("status") = std::unordered_map<std::string, std::vector<double>>{},
          py::arg("method") = EstimationMethod::ML,
-         py::arg("extra_param_mappings") = std::unordered_map<std::string, std::vector<std::string>>{});
+         py::arg("extra_param_mappings") = std::unordered_map<std::string, std::vector<std::string>>{})
+        .def("fit_multi_group", &LikelihoodDriver::fit_multi_group,
+             py::arg("models"),
+             py::arg("data"),
+             py::arg("options"),
+             py::arg("optimizer_name") = "lbfgs",
+             py::arg("fixed_covariance_data") = std::vector<std::unordered_map<std::string, std::vector<std::vector<double>>>>{},
+             py::arg("status") = std::vector<std::unordered_map<std::string, std::vector<double>>>{},
+             py::arg("method") = EstimationMethod::ML,
+             py::arg("extra_param_mappings") = std::vector<std::unordered_map<std::string, std::vector<std::string>>>{});
 
     py::class_<GenomicRelationshipMatrix>(m, "GenomicRelationshipMatrix")
         .def_static("vanraden",

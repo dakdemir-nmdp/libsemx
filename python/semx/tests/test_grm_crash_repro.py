@@ -89,6 +89,9 @@ def test_grm_incorrect_grouping_raises_error():
         }]
     )
     
-    # This should raise RuntimeError because q (10) != n_i (1) and no design cols specified
-    with pytest.raises(RuntimeError, match="expects .* design columns"):
+    # This used to raise RuntimeError because q (10) != n_i (1) and no design cols specified
+    # But now it should be handled gracefully (treating each individual as a group)
+    try:
         model.fit(df)
+    except RuntimeError:
+        pytest.fail("Should not raise RuntimeError")

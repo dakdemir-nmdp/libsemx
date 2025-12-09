@@ -203,23 +203,32 @@ std::vector<double> to_row_major(const Rcpp::NumericMatrix& mat) {
     return out;
 }
 
-std::vector<double> grm_vanraden_cpp(const Rcpp::NumericMatrix& markers,
+Rcpp::NumericMatrix grm_vanraden_cpp(const Rcpp::NumericMatrix& markers,
                                      bool center,
                                      bool normalize) {
     std::size_t n_individuals = static_cast<std::size_t>(markers.nrow());
     std::size_t n_markers = static_cast<std::size_t>(markers.ncol());
     auto flattened = to_row_major(markers);
     GenomicKernelOptions opts{center, normalize};
-    return GenomicRelationshipMatrix::vanraden(flattened, n_individuals, n_markers, opts);
+    std::vector<double> res = GenomicRelationshipMatrix::vanraden(flattened, n_individuals, n_markers, opts);
+    
+    Rcpp::NumericMatrix mat(n_individuals, n_individuals);
+    std::copy(res.begin(), res.end(), mat.begin());
+    return mat;
 }
 
-std::vector<double> grm_kronecker_cpp(const Rcpp::NumericMatrix& left,
+Rcpp::NumericMatrix grm_kronecker_cpp(const Rcpp::NumericMatrix& left,
                                       const Rcpp::NumericMatrix& right) {
     std::size_t left_dim = static_cast<std::size_t>(left.nrow());
     std::size_t right_dim = static_cast<std::size_t>(right.nrow());
     auto left_rm = to_row_major(left);
     auto right_rm = to_row_major(right);
-    return GenomicRelationshipMatrix::kronecker(left_rm, left_dim, right_rm, right_dim);
+    std::vector<double> res = GenomicRelationshipMatrix::kronecker(left_rm, left_dim, right_rm, right_dim);
+    
+    std::size_t total_dim = left_dim * right_dim;
+    Rcpp::NumericMatrix mat(total_dim, total_dim);
+    std::copy(res.begin(), res.end(), mat.begin());
+    return mat;
 }
 
 } // namespace
@@ -302,11 +311,8 @@ FitResult LikelihoodDriver_fit(LikelihoodDriver* driver,
                                         std::string optimizer_name,
                                         Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                         int method) {
-    Rcpp::Rcerr << "LikelihoodDriver_fit wrapper called" << std::endl;
     auto data_map = list_to_map(data);
-    Rcpp::Rcerr << "Data map created, size: " << data_map.size() << std::endl;
     auto extra_map = list_to_string_vector_map(extra_param_mappings);
-    Rcpp::Rcerr << "Extra map created" << std::endl;
     return driver->fit(*model, data_map, *options, optimizer_name, {}, {}, static_cast<EstimationMethod>(method), extra_map);
 }
 
@@ -356,6 +362,30 @@ FitResult LikelihoodDriver_fit_with_fixed_and_status(LikelihoodDriver* driver,
                        list_to_map(status),
                        static_cast<EstimationMethod>(method),
                        list_to_string_vector_map(extra_param_mappings));
+}
+
+FitResult LikelihoodDriver_fit_simple(LikelihoodDriver* driver,
+                                        ModelIR* model,
+                                        Rcpp::List data,
+                                        OptimizationOptions* options,
+                                        std::string optimizer_name) {
+    return driver->fit(*model, list_to_map(data), *options, optimizer_name, {}, {}, EstimationMethod::ML, {});
+}
+
+FitResult LikelihoodDriver_fit_with_fixed_simple(LikelihoodDriver* driver,
+                                                   ModelIR* model,
+                                                   Rcpp::List data,
+                                                   OptimizationOptions* options,
+                                                   std::string optimizer_name,
+                                                   Rcpp::Nullable<Rcpp::List> fixed_covariance_data) {
+    return driver->fit(*model,
+                       list_to_map(data),
+                       *options,
+                       optimizer_name,
+                       list_to_matrix_map(fixed_covariance_data),
+                       {},
+                       EstimationMethod::ML,
+                       {});
 }
 
 std::string edge_kind_to_string(EdgeKind k) {
@@ -520,9 +550,76 @@ std::unordered_map<std::string, std::vector<double>> get_fit_covariance_matrices
     return obj->covariance_matrices;
 }
 
+std::unordered_map<std::string, std::vector<double>> get_fit_random_effects(FitResult* obj) {
+    return obj->random_effects;
+}
+
+FitResult LikelihoodDriver_fit_multi_group(LikelihoodDriver* driver,
+                                           Rcpp::List models,
+                                           Rcpp::List data_list,
+                                           OptimizationOptions* options,
+                                           std::string optimizer_name,
+                                           Rcpp::Nullable<Rcpp::List> fixed_covariance_data_list,
+                                           Rcpp::Nullable<Rcpp::List> status_list,
+                                           Rcpp::Nullable<Rcpp::List> extra_param_mappings_list,
+                                           int method) {
+    std::vector<ModelIR> cpp_models;
+    for (int i = 0; i < models.size(); ++i) {
+        ModelIR* ptr = Rcpp::as<ModelIR*>(models[i]);
+        cpp_models.push_back(*ptr);
+    }
+
+    std::vector<std::unordered_map<std::string, std::vector<double>>> cpp_data_list;
+    for (int i = 0; i < data_list.size(); ++i) {
+        cpp_data_list.push_back(list_to_map(Rcpp::List(data_list[i])));
+    }
+
+    std::vector<std::unordered_map<std::string, std::vector<std::vector<double>>>> cpp_fixed_cov_list;
+    if (fixed_covariance_data_list.isNotNull()) {
+        Rcpp::List list(fixed_covariance_data_list);
+        for (int i = 0; i < list.size(); ++i) {
+            cpp_fixed_cov_list.push_back(list_to_matrix_map(Rcpp::List(list[i])));
+        }
+    }
+
+    std::vector<std::unordered_map<std::string, std::vector<double>>> cpp_status_list;
+    if (status_list.isNotNull()) {
+        Rcpp::List list(status_list);
+        for (int i = 0; i < list.size(); ++i) {
+            cpp_status_list.push_back(list_to_map(Rcpp::List(list[i])));
+        }
+    }
+
+    std::vector<std::unordered_map<std::string, std::vector<std::string>>> cpp_extra_mappings_list;
+    if (extra_param_mappings_list.isNotNull()) {
+        Rcpp::List list(extra_param_mappings_list);
+        for (int i = 0; i < list.size(); ++i) {
+            cpp_extra_mappings_list.push_back(list_to_string_vector_map(Rcpp::List(list[i])));
+        }
+    }
+
+    return driver->fit_multi_group(cpp_models,
+                                   cpp_data_list,
+                                   *options,
+                                   optimizer_name,
+                                   cpp_fixed_cov_list,
+                                   cpp_status_list,
+                                   static_cast<EstimationMethod>(method),
+                                   cpp_extra_mappings_list);
+}
+
 // Wrapper for ModelIRBuilder::build
 ModelIR* ModelIRBuilder_build(ModelIRBuilder* builder) {
     return new ModelIR(builder->build());
+}
+
+void ModelIRBuilder_add_covariance(ModelIRBuilder* builder, std::string id, std::string structure, int dimension, Rcpp::Nullable<Rcpp::StringVector> component_ids) {
+    std::vector<std::string> comps;
+    if (component_ids.isNotNull()) {
+        Rcpp::StringVector vec(component_ids);
+        for(int i=0; i<vec.size(); ++i) comps.push_back(Rcpp::as<std::string>(vec[i]));
+    }
+    builder->add_covariance(id, structure, dimension, comps);
 }
 
 RCPP_MODULE(semx) {
@@ -536,7 +633,7 @@ RCPP_MODULE(semx) {
         .constructor()
         .method("add_variable", &ModelIRBuilder_add_variable)
         .method("add_edge", &ModelIRBuilder_add_edge)
-        .method("add_covariance", &ModelIRBuilder::add_covariance)
+        .method("add_covariance", &ModelIRBuilder_add_covariance)
         .method("add_random_effect", &ModelIRBuilder::add_random_effect)
         .method("register_parameter", &ModelIRBuilder::register_parameter)
         .method("build", &ModelIRBuilder_build)
@@ -552,6 +649,7 @@ RCPP_MODULE(semx) {
         .field("delta", &OptimizationOptions::delta)
         .field("max_linesearch", &OptimizationOptions::max_linesearch)
         .field("linesearch_type", &OptimizationOptions::linesearch_type)
+        .field("force_laplace", &OptimizationOptions::force_laplace)
     ;
 
     class_<OptimizationResult>("OptimizationResult")
@@ -577,6 +675,7 @@ RCPP_MODULE(semx) {
         .field("rmsea", &FitResult::rmsea)
         .field("srmr", &FitResult::srmr)
         .property("covariance_matrices", &get_fit_covariance_matrices, "Get covariance matrices")
+        .property("random_effects", &get_fit_random_effects, "Get random effects")
     ;
 
     class_<LikelihoodDriver>("LikelihoodDriver")
@@ -585,9 +684,12 @@ RCPP_MODULE(semx) {
         .method("evaluate_model_loglik_full", &LikelihoodDriver_evaluate_model_loglik_full)
         .method("evaluate_model_gradient", &LikelihoodDriver_evaluate_model_gradient)
         .method("fit", &LikelihoodDriver_fit)
+        .method("fit", &LikelihoodDriver_fit_simple)
         .method("fit_with_fixed", &LikelihoodDriver_fit_with_fixed)
+        .method("fit_with_fixed", &LikelihoodDriver_fit_with_fixed_simple)
         .method("fit_with_status", &LikelihoodDriver_fit_with_status)
         .method("fit_with_fixed_and_status", &LikelihoodDriver_fit_with_fixed_and_status)
+        .method("fit_multi_group", &LikelihoodDriver_fit_multi_group)
     ;
 
     function("grm_vanraden_cpp", &grm_vanraden_cpp);

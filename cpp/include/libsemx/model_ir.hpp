@@ -16,7 +16,7 @@ public:
 
     void add_edge(EdgeKind kind, std::string source, std::string target, std::string parameter_id);
 
-    void add_covariance(std::string id, std::string structure, std::size_t dimension);
+    void add_covariance(std::string id, std::string structure, std::size_t dimension, std::vector<std::string> component_ids = {});
 
     void add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id);
 

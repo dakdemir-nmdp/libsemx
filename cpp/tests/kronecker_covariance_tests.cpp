@@ -98,9 +98,70 @@ TEST_CASE("KroneckerCovariance: Gradients with learn_scale", "[covariance][krone
         auto m_plus = kron.materialize(p_plus);
         auto m_minus = kron.materialize(p_minus);
         
-        for (size_t j = 0; j < m_plus.size(); ++j) {
-            double num_grad = (m_plus[j] - m_minus[j]) / (2 * eps);
-            REQUIRE_THAT(analytic[i][j], Catch::Matchers::WithinRel(num_grad, 1e-4));
+        for (size_t k = 0; k < m_plus.size(); ++k) {
+            double num_grad = (m_plus[k] - m_minus[k]) / (2 * eps);
+            REQUIRE_THAT(analytic[i][k], Catch::Matchers::WithinRel(num_grad, 1e-4));
         }
     }
 }
+
+TEST_CASE("KroneckerCovariance: Sparse Materialization", "[covariance][kronecker][sparse]") {
+    std::vector<std::unique_ptr<CovarianceStructure>> components;
+    components.push_back(std::make_unique<DiagonalCovariance>(2));
+    components.push_back(std::make_unique<DiagonalCovariance>(2));
+    
+    KroneckerCovariance kron(std::move(components));
+    
+    REQUIRE(kron.is_sparse());
+    
+    std::vector<double> params = {1.0, 2.0, 3.0, 4.0};
+    
+    // Dense:
+    // A = diag(1, 2)
+    // B = diag(3, 4)
+    // A x B = diag(3, 4, 6, 8)
+    
+    Eigen::SparseMatrix<double> sparse = kron.materialize_sparse(params);
+    
+    REQUIRE(sparse.rows() == 4);
+    REQUIRE(sparse.cols() == 4);
+    REQUIRE(sparse.nonZeros() == 4);
+    
+    REQUIRE(sparse.coeff(0, 0) == 3.0);
+    REQUIRE(sparse.coeff(1, 1) == 4.0);
+    REQUIRE(sparse.coeff(2, 2) == 6.0);
+    REQUIRE(sparse.coeff(3, 3) == 8.0);
+}
+
+TEST_CASE("KroneckerCovariance: Sparse Gradients", "[covariance][kronecker][sparse]") {
+    std::vector<std::unique_ptr<CovarianceStructure>> components;
+    components.push_back(std::make_unique<DiagonalCovariance>(2));
+    components.push_back(std::make_unique<DiagonalCovariance>(2));
+    
+    KroneckerCovariance kron(std::move(components), true); // learn_scale=true
+    
+    std::vector<double> params = {2.0, 1.0, 2.0, 3.0, 4.0};
+    
+    auto dense_grads = kron.parameter_gradients(params);
+    auto sparse_grads = kron.parameter_gradients_sparse(params);
+    
+    REQUIRE(dense_grads.size() == sparse_grads.size());
+    
+    for (size_t i = 0; i < dense_grads.size(); ++i) {
+        const auto& dense = dense_grads[i];
+        const auto& sparse = sparse_grads[i];
+        
+        REQUIRE(sparse.rows() == 4);
+        REQUIRE(sparse.cols() == 4);
+        
+        // Check that sparse matches dense
+        for (int r = 0; r < 4; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                double d_val = dense[r * 4 + c];
+                double s_val = sparse.coeff(r, c);
+                REQUIRE_THAT(s_val, Catch::Matchers::WithinRel(d_val, 1e-10) || Catch::Matchers::WithinAbs(0.0, 1e-10));
+            }
+        }
+    }
+}
+

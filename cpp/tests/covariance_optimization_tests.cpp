@@ -30,8 +30,10 @@ TEST_CASE("LikelihoodDriver optimizes covariance parameters", "[optimization][mi
     // Or maybe we just use the covariance ID as a prefix?
     // 
     // For now, let's see if we can just use "tau_sq" as the parameter ID if it's 1D.
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
     builder.add_covariance("tau_sq", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "1");
 
     auto model = builder.build();
 

@@ -19,7 +19,8 @@ public:
                    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data = {},
                    const std::unordered_map<std::string, std::vector<double>>& status = {},
                    EstimationMethod method = EstimationMethod::ML,
-                   const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings = {});
+                   const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings = {},
+                   bool force_laplace = false);
 
     [[nodiscard]] double value(const std::vector<double>& parameters) const override;
 
@@ -41,7 +42,7 @@ public:
 
     [[nodiscard]] std::unordered_map<std::string, std::vector<double>> get_covariance_matrices(const std::vector<double>& constrained_parameters) const;
 
-    // Helper to expose workspaces for diagnostics
+        // Helper to expose workspaces for diagnostics
     void build_prediction_workspaces(const std::vector<double>& constrained_parameters,
                                      std::unordered_map<std::string, std::vector<double>>& linear_predictors,
                                      std::unordered_map<std::string, std::vector<double>>& dispersions,
@@ -67,6 +68,7 @@ private:
     ParameterCatalog catalog_;
     std::unordered_map<std::string, std::pair<size_t, size_t>> covariance_param_ranges_;
     std::unordered_map<std::string, std::vector<std::string>> extra_param_mappings_;
+    bool force_laplace_{false};
 
     // SEM support
     bool sem_mode_{false};
@@ -99,6 +101,43 @@ private:
         std::vector<Element> elements;
     };
     std::vector<SemCovarianceMapping> sem_covariance_mappings_;
+    
+    mutable SparseHessianAccumulator sparse_accumulator_;
+};
+
+class MultiGroupModelObjective : public ObjectiveFunction {
+public:
+    MultiGroupModelObjective(std::vector<std::unique_ptr<ModelObjective>> objectives);
+
+    [[nodiscard]] double value(const std::vector<double>& parameters) const override;
+
+    [[nodiscard]] std::vector<double> gradient(const std::vector<double>& parameters) const override;
+
+    [[nodiscard]] double value_and_gradient(const std::vector<double>& parameters,
+                                            std::vector<double>& gradient) const override;
+
+    [[nodiscard]] const std::vector<std::string>& parameter_names() const;
+
+    [[nodiscard]] std::vector<double> initial_parameters() const;
+
+    [[nodiscard]] std::vector<double> to_constrained(const std::vector<double>& unconstrained) const;
+
+    // Helper to split global parameters into group-specific parameters
+    [[nodiscard]] std::vector<std::vector<double>> split_parameters(const std::vector<double>& global_parameters) const;
+
+    // Helper to aggregate group-specific results (e.g. SEs) - though SEs are usually computed from global Hessian
+    
+    const std::vector<std::unique_ptr<ModelObjective>>& objectives() const { return objectives_; }
+
+private:
+    std::vector<std::unique_ptr<ModelObjective>> objectives_;
+    std::vector<std::string> parameter_names_;
+    std::unordered_map<std::string, size_t> parameter_name_to_index_;
+    
+    // For each objective, a list of indices into the global parameter vector
+    // objectives_[i] needs parameters[ global_indices_[i][j] ] for its j-th parameter
+    std::vector<std::vector<size_t>> global_indices_;
 };
 
 }  // namespace libsemx
+

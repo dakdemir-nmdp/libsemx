@@ -10,7 +10,9 @@ semx_fit(
   options = NULL,
   optimizer_name = "lbfgs",
   fixed_covariance_data = NULL,
-  estimation_method = "ML"
+  estimation_method = "ML",
+  group = NULL,
+  group.equal = NULL
 )
 }
 \arguments{
@@ -25,6 +27,10 @@ semx_fit(
 \item{fixed_covariance_data}{Optional list of fixed covariance matrices.}
 
 \item{estimation_method}{Estimation method ("ML" or "REML").}
+
+\item{group}{Name of the grouping variable for multi-group analysis.}
+
+\item{group.equal}{Constraints across groups. E.g. c("loadings", "intercepts").}
 }
 \value{
 A FitResult object.

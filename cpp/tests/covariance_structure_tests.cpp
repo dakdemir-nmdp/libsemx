@@ -126,3 +126,44 @@ TEST_CASE("FactorAnalyticCovariance builds low-rank structure", "[covariance]") 
     REQUIRE(matrix[8] == Catch::Approx(0.7 + 0.04));
     expect_gradient_match(cov, params, 5e-5);
 }
+
+TEST_CASE("DiagonalCovariance supports sparse materialization", "[covariance][sparse]") {
+    libsemx::DiagonalCovariance cov(3);
+    REQUIRE(cov.is_sparse());
+    
+    const std::vector<double> params{1.0, 2.0, 3.0};
+    
+    // Check dense materialization
+    const auto dense = cov.materialize(params);
+    REQUIRE(dense[0] == 1.0);
+    REQUIRE(dense[4] == 2.0);
+    REQUIRE(dense[8] == 3.0);
+    REQUIRE(dense[1] == 0.0);
+    
+    // Check sparse materialization
+    const auto sparse = cov.materialize_sparse(params);
+    REQUIRE(sparse.rows() == 3);
+    REQUIRE(sparse.cols() == 3);
+    REQUIRE(sparse.nonZeros() == 3);
+    
+    REQUIRE(sparse.coeff(0, 0) == 1.0);
+    REQUIRE(sparse.coeff(1, 1) == 2.0);
+    REQUIRE(sparse.coeff(2, 2) == 3.0);
+    REQUIRE(sparse.coeff(0, 1) == 0.0);
+}
+
+TEST_CASE("UnstructuredCovariance default sparse fallback works", "[covariance][sparse]") {
+    libsemx::UnstructuredCovariance cov(2);
+    REQUIRE_FALSE(cov.is_sparse());
+    
+    const std::vector<double> params{1.0, 0.5, 2.0};
+    const auto sparse = cov.materialize_sparse(params);
+    
+    REQUIRE(sparse.rows() == 2);
+    REQUIRE(sparse.cols() == 2);
+    REQUIRE(sparse.coeff(0, 0) == 1.0);
+    REQUIRE(sparse.coeff(1, 0) == 0.5);
+    REQUIRE(sparse.coeff(0, 1) == 0.5);
+    REQUIRE(sparse.coeff(1, 1) == 4.25);
+}
+

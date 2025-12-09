@@ -6,6 +6,8 @@
 #include <string>
 #include <unordered_map>
 
+#include <Eigen/SparseCore>
+
 #include "libsemx/model_ir.hpp"
 
 namespace libsemx {
@@ -20,7 +22,13 @@ public:
 
     [[nodiscard]] std::vector<double> materialize(const std::vector<double>& parameters) const;
 
+    [[nodiscard]] virtual bool is_sparse() const { return false; }
+
+    [[nodiscard]] virtual Eigen::SparseMatrix<double> materialize_sparse(const std::vector<double>& parameters) const;
+
     [[nodiscard]] virtual std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const;
+
+    [[nodiscard]] virtual std::vector<Eigen::SparseMatrix<double>> parameter_gradients_sparse(const std::vector<double>& parameters) const;
 
 protected:
     CovarianceStructure(std::size_t dimension, std::size_t parameter_count);
@@ -67,6 +75,12 @@ protected:
 class DiagonalCovariance final : public CovarianceStructure {
 public:
     explicit DiagonalCovariance(std::size_t dimension);
+
+    [[nodiscard]] bool is_sparse() const override { return true; }
+
+    [[nodiscard]] Eigen::SparseMatrix<double> materialize_sparse(const std::vector<double>& parameters) const override;
+
+    [[nodiscard]] std::vector<Eigen::SparseMatrix<double>> parameter_gradients_sparse(const std::vector<double>& parameters) const override;
 
 protected:
     void fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const override;

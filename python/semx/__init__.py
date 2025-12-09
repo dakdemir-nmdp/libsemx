@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from _libsemx import (
+from ._libsemx import (
     LikelihoodDriver,
     ModelIR,
     ModelIRBuilder,
     VariableKind,
     EdgeKind,
+    ParameterConstraint,
     EstimationMethod,
     OptimizationOptions,
     OptimizationResult,

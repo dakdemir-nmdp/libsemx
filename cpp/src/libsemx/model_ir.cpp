@@ -10,8 +10,8 @@ void ModelIRBuilder::add_edge(EdgeKind kind, std::string source, std::string tar
     graph_.add_edge(kind, std::move(source), std::move(target), std::move(parameter_id));
 }
 
-void ModelIRBuilder::add_covariance(std::string id, std::string structure, std::size_t dimension) {
-    graph_.add_covariance(std::move(id), std::move(structure), dimension);
+void ModelIRBuilder::add_covariance(std::string id, std::string structure, std::size_t dimension, std::vector<std::string> component_ids) {
+    graph_.add_covariance(std::move(id), std::move(structure), dimension, std::move(component_ids));
 }
 
 void ModelIRBuilder::add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id) {

@@ -14,10 +14,12 @@ TEST_CASE("LikelihoodDriver evaluates Gaussian Random Intercept Model", "[mixed]
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
     
     // Random intercept: u ~ N(0, tau^2)
     builder.add_covariance("tau_sq", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "1");
 
     auto model = builder.build();
 
@@ -78,10 +80,12 @@ TEST_CASE("LikelihoodDriver evaluates Gaussian Random Slope Model", "[mixed][gau
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("x", libsemx::VariableKind::Latent); // Predictor for random slope (Latent to skip likelihood eval)
+    builder.add_variable("u_slope", libsemx::VariableKind::Latent);
     
     // Random slope: u ~ N(0, tau^2)
     builder.add_covariance("tau_sq", "diagonal", 1);
     builder.add_random_effect("u_slope", {"cluster", "x"}, "tau_sq");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_slope", "y", "1");
 
     auto model = builder.build();
 
@@ -147,11 +151,15 @@ TEST_CASE("LikelihoodDriver log-likelihood handles crossed grouping factors", "[
     builder.add_variable("x", libsemx::VariableKind::Latent);
     builder.add_variable("cluster_a", libsemx::VariableKind::Grouping);
     builder.add_variable("cluster_b", libsemx::VariableKind::Grouping);
+    builder.add_variable("u_a", libsemx::VariableKind::Latent);
+    builder.add_variable("u_b", libsemx::VariableKind::Latent);
 
     builder.add_covariance("G_a", "diagonal", 1);
     builder.add_covariance("G_b", "diagonal", 1);
     builder.add_random_effect("u_a", {"cluster_a"}, "G_a");
     builder.add_random_effect("u_b", {"cluster_b"}, "G_b");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_a", "y", "1");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_b", "y", "1");
 
     auto model = builder.build();
 

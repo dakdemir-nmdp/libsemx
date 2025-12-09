@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm, chi2
 
-from _libsemx import (
+from ._libsemx import (
     EdgeKind,
     GenomicRelationshipMatrix,
     ModelIR,
@@ -54,6 +54,7 @@ _VARIABLE_KIND_ALIASES: Dict[str, VariableKind] = {
     "observed": VariableKind.Observed,
     "latent": VariableKind.Latent,
     "grouping": VariableKind.Grouping,
+    "exogenous": VariableKind.Exogenous,
 }
 
 
@@ -62,13 +63,85 @@ class SemFit:
 
     def __init__(
         self,
-        model_ir: ModelIR,
+        model_ir: Union[ModelIR, List[ModelIR]],
         fit_result: Any,
-        sample_stats: Optional[Dict[str, Any]] = None,
+        sample_stats: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        data: Optional[Union[pd.DataFrame, List[pd.DataFrame]]] = None,
     ) -> None:
         self.model_ir = model_ir
         self.fit_result = fit_result
         self.sample_stats = sample_stats or {}
+        self.data = data
+
+    def predict(self, newdata: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """
+        Predict values for endogenous variables (linear predictor).
+        
+        Args:
+            newdata: Optional DataFrame. If None, uses original data.
+            
+        Returns:
+            DataFrame with predictions.
+        """
+        if isinstance(self.model_ir, list):
+            # Multi-group prediction
+            if newdata is not None:
+                raise NotImplementedError("Prediction with new data not yet supported for multi-group models")
+            
+            # If using original data (which should be a list of DataFrames)
+            if self.data is None or not isinstance(self.data, list):
+                 raise ValueError("No data available for prediction.")
+            
+            predictions = []
+            for i, (ir, df) in enumerate(zip(self.model_ir, self.data)):
+                # Logic similar to single group, but using group-specific parameters?
+                # We need to extract parameters for this group.
+                # fit_result.parameters is a flat vector.
+                # We need to map parameter names to values.
+                # Parameter names in IR should match names in fit_result.
+                # So we can just use the full parameter vector.
+                
+                # ... (duplicate logic or extract helper)
+                # For now, let's just raise NotImplementedError to be safe
+                pass
+            raise NotImplementedError("Prediction not yet supported for multi-group models")
+
+        data = newdata if newdata is not None else self.data
+        if data is None:
+            raise ValueError("No data available for prediction.")
+            
+        # Ensure intercept
+        # We need to know if model uses intercept. 
+        # Currently ModelIR doesn't expose uses_intercept_column directly as a property?
+        # But we can check if "_intercept" is in variables.
+        uses_intercept = any(v.name == "_intercept" for v in self.model_ir.variables)
+        
+        if uses_intercept and "_intercept" not in data.columns:
+            data = data.copy()
+            data["_intercept"] = 1.0
+            
+        params = self.parameter_estimates
+        preds = {}
+        
+        # Identify endogenous variables (targets of regressions)
+        targets = set()
+        for edge in self.model_ir.edges:
+            if edge.kind == EdgeKind.Regression:
+                targets.add(edge.target)
+                
+        for target in targets:
+            # Find predictors
+            relevant_edges = [e for e in self.model_ir.edges if e.kind == EdgeKind.Regression and e.target == target]
+            
+            y_hat = np.zeros(len(data))
+            for edge in relevant_edges:
+                val = params.get(edge.parameter_id, 0.0)
+                if edge.source in data.columns:
+                    y_hat += val * data[edge.source].values
+                
+            preds[target] = y_hat
+            
+        return pd.DataFrame(preds)
 
     @property
     def optimization_result(self) -> Any:
@@ -98,6 +171,34 @@ class SemFit:
             "aic": self.fit_result.aic,
             "bic": self.fit_result.bic,
         }
+
+    def plot(self, filename: Optional[str] = None, view: bool = True) -> Any:
+        """
+        Generate a path diagram for the fitted model.
+        
+        Args:
+            filename: Optional filename to save the rendered graph.
+            view: Whether to open the rendered graph.
+            
+        Returns:
+            A graphviz.Digraph object.
+        """
+        from .plotting import plot_path
+        return plot_path(self, filename=filename, view=view)
+
+    def plot_survival(self, newdata: Optional[pd.DataFrame] = None, time_grid: Optional[Any] = None) -> Any:
+        """
+        Generate survival curves for survival outcomes.
+        
+        Args:
+            newdata: Optional DataFrame for prediction.
+            time_grid: Optional time points.
+            
+        Returns:
+            A matplotlib Figure or list of Figures.
+        """
+        from .plotting import plot_survival
+        return plot_survival(self, newdata=newdata, time_grid=time_grid)
 
     def standardized_solution(self) -> Any:
         """Compute standardized parameter estimates (std.lv and std.all)."""
@@ -752,11 +853,74 @@ class Model:
             for edge in self._edges:
                 builder.add_edge(edge.kind, edge.source, edge.target, edge.parameter_id)
             for cov in self._covariances:
-                builder.add_covariance(cov["name"], cov["structure"], cov["dimension"])
+                comp_ids = []
+                if "components" in cov:
+                    comp_ids = [c["id"] for c in cov["components"]]
+                builder.add_covariance(cov["name"], cov["structure"], cov["dimension"], comp_ids)
             for re in self._random_effects:
                 builder.add_random_effect(re["name"], re["variables"], re["covariance"])
             self._ir = builder.build()
         return self._ir
+
+    def _to_ir_for_group(self, group_suffix: str, group_equal: Sequence[str]) -> ModelIR:
+        """Generate ModelIR for a specific group, handling parameter constraints."""
+        builder = ModelIRBuilder()
+        
+        # Variables
+        for var in self._variables.values():
+            builder.add_variable(var.name, var.kind, var.family, var.label, var.measurement_level)
+            
+        # Edges
+        for edge in self._edges:
+            pid = edge.parameter_id
+            should_suffix = True
+            
+            # Check constraints
+            if edge.kind == EdgeKind.Regression:
+                # Intercepts
+                if edge.source in ("_intercept", "1", "one"):
+                    if "intercepts" in group_equal or "means" in group_equal:
+                        should_suffix = False
+                elif "regressions" in group_equal:
+                    should_suffix = False
+            elif edge.kind == EdgeKind.Loading:
+                if "loadings" in group_equal:
+                    should_suffix = False
+            elif edge.kind == EdgeKind.Covariance:
+                # Distinguish residual variances (observed) vs latent variances
+                # For now, use "residuals" for observed variances/covariances
+                # and "covariances" for latent/other.
+                # Or just "covariances" for all?
+                # lavaan uses "residuals" for theta (observed errors) and "lv.variances"/"lv.covariances" for psi.
+                # Here we just check if "residuals" or "covariances" is in group_equal.
+                if "covariances" in group_equal or "residuals" in group_equal:
+                    should_suffix = False
+            
+            # Don't suffix fixed parameters (numeric)
+            try:
+                float(pid)
+                should_suffix = False
+            except ValueError:
+                pass
+                
+            final_pid = f"{pid}_{group_suffix}" if should_suffix else pid
+            builder.add_edge(edge.kind, edge.source, edge.target, final_pid)
+            
+        # Covariances (Structured)
+        for cov in self._covariances:
+            name = cov["name"]
+            should_suffix = "covariances" not in group_equal
+            final_name = f"{name}_{group_suffix}" if should_suffix else name
+            builder.add_covariance(final_name, cov["structure"], cov["dimension"])
+            
+        # Random Effects
+        for re in self._random_effects:
+            cov_name = re["covariance"]
+            should_suffix = "covariances" not in group_equal
+            final_cov_name = f"{cov_name}_{group_suffix}" if should_suffix else cov_name
+            builder.add_random_effect(re["name"], re["variables"], final_cov_name)
+            
+        return builder.build()
 
     def fixed_covariance_data(self) -> Dict[str, List[List[float]]]:
         """Return fixed covariance matrices derived from genomic marker inputs."""
@@ -790,6 +954,8 @@ class Model:
         options: Optional[Any] = None,
         optimizer_name: str = "lbfgs",
         fixed_covariance_data: Optional[Mapping[str, Sequence[Sequence[float]]]] = None,
+        group: Optional[str] = None,
+        group_equal: Optional[Sequence[str]] = None,
         **kwargs
     ) -> SemFit:
         """Fit the model to data.
@@ -804,6 +970,10 @@ class Model:
             Name of the optimizer to use (default: "lbfgs").
         fixed_covariance_data : dict, optional
             Fixed covariance matrices.
+        group : str, optional
+            Name of the grouping variable for multi-group analysis.
+        group_equal : list of str, optional
+            Constraints across groups. E.g. ["loadings", "intercepts"].
         **kwargs
             Additional optimization options passed to OptimizationOptions if options is None.
             Supported: max_iterations, tolerance, learning_rate, m, past, delta, max_linesearch, linesearch_type.
@@ -814,7 +984,7 @@ class Model:
             The result of the fit, including parameter estimates, standard errors,
             fit statistics, and diagnostic methods.
         """
-        from _libsemx import LikelihoodDriver, OptimizationOptions
+        from ._libsemx import LikelihoodDriver, OptimizationOptions
 
         if options is None:
             options = OptimizationOptions()
@@ -853,6 +1023,66 @@ class Model:
             # However, we already expanded data_dict.
             # So we can just continue using model_to_fit.
             pass
+
+        # Handle Multi-Group
+        if group is not None:
+            if group not in data_dict:
+                raise ValueError(f"Grouping variable '{group}' not found in data")
+            
+            # Convert to DataFrame for easier splitting
+            df = pd.DataFrame(data_dict)
+            groups = df[group].unique()
+            groups.sort() # Ensure deterministic order
+            
+            models = []
+            data_list = []
+            fixed_cov_list = [] # Not supported yet, pass empty?
+            status_maps = []
+            sample_stats_list = []
+            
+            if fixed_covariance_data or model_to_fit._genomic_specs:
+                raise NotImplementedError("Genomic/Fixed covariance not yet supported in multi-group analysis via high-level API")
+
+            for g_label in groups:
+                # Subset data
+                df_g = df[df[group] == g_label]
+                data_g = df_g.to_dict(orient="list")
+                
+                # Filter non-numeric
+                keys_to_remove = []
+                for k, v in data_g.items():
+                    if v and isinstance(v[0], str):
+                        keys_to_remove.append(k)
+                for k in keys_to_remove:
+                    del data_g[k]
+                
+                # Inject intercept
+                if model_to_fit._uses_intercept_column and "_intercept" not in data_g:
+                    data_g["_intercept"] = [1.0] * len(df_g)
+                
+                # Generate IR
+                ir_g = model_to_fit._to_ir_for_group(str(g_label), group_equal or [])
+                models.append(ir_g)
+                data_list.append(data_g)
+                fixed_cov_list.append({}) # Empty for now
+                
+                # Status map
+                status_map_g = {}
+                if hasattr(model_to_fit, "_survival_status_map"):
+                    for time_var, status_var in model_to_fit._survival_status_map.items():
+                        if status_var not in df_g.columns:
+                            raise ValueError(f"Status variable '{status_var}' not found in group {g_label}")
+                        status_map_g[time_var] = df_g[status_var].astype(float).tolist()
+                status_maps.append(status_map_g)
+                
+                # Sample stats (simplified)
+                sample_stats_list.append({"n_obs": len(df_g)})
+
+            driver = LikelihoodDriver()
+            fit_res = driver.fit_multi_group(models, data_list, options, optimizer_name, fixed_cov_list, status_maps)
+            
+            data_dfs = [df[df[group] == g] for g in groups]
+            return SemFit(models, fit_res, sample_stats_list, data=data_dfs)
 
         # Filter out non-numeric columns to avoid pybind11 conversion errors
         # C++ expects std::unordered_map<std::string, std::vector<double>>
@@ -959,7 +1189,7 @@ class Model:
         
         fit_res = driver.fit(ir, data_dict, options, optimizer_name, merged_fixed, status_map)
 
-        return SemFit(ir, fit_res, sample_stats)
+        return SemFit(ir, fit_res, sample_stats, data=data)
 
     @property
     def variables(self) -> Mapping[str, _VariableDef]:

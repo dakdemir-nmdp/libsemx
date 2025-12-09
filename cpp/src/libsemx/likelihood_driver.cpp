@@ -12,10 +12,13 @@
 #include "libsemx/multi_kernel_covariance.hpp"
 
 #include <Eigen/Dense>
+#include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <map>
 #include <cstddef>
 #include <limits>
 #include <map>
@@ -31,6 +34,9 @@
 
 namespace libsemx {
 
+
+
+
 namespace {
 
 
@@ -44,10 +50,19 @@ struct RandomEffectInfo {
     std::vector<std::string> design_vars;
     std::string covariance_id;
     const CovarianceSpec* cov_spec;
+    
+    // Dense storage
     std::vector<double> G_matrix;
     std::vector<double> G_inverse;
-    double log_det_G = 0.0;
     std::vector<std::vector<double>> G_gradients;
+    
+    // Sparse storage
+    bool is_sparse = false;
+    std::shared_ptr<Eigen::SparseMatrix<double>> G_sparse;
+    std::shared_ptr<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>> sparse_solver;
+    std::vector<Eigen::SparseMatrix<double>> G_gradients_sparse;
+
+    double log_det_G = 0.0;
     std::vector<std::string> target_vars;
 };
 
@@ -86,6 +101,7 @@ std::vector<double> solve_cholesky(std::size_t n,
                                    const std::vector<double>& lower,
                                    const std::vector<double>& rhs) {
     if (lower.size() != n * n || rhs.size() != n) {
+        std::cerr << "solve_cholesky mismatch: n=" << n << " lower.size=" << lower.size() << " rhs.size=" << rhs.size() << std::endl;
         throw std::invalid_argument("Dimension mismatch in solve_cholesky");
     }
     Eigen::Map<const RowMajorMatrix> L(lower.data(), n, n);
@@ -94,6 +110,18 @@ std::vector<double> solve_cholesky(std::size_t n,
     Eigen::VectorXd x = L.transpose().triangularView<Eigen::Upper>().solve(y);
     std::vector<double> result(n);
     Eigen::Map<Eigen::VectorXd>(result.data(), n) = x;
+    return result;
+}
+
+std::vector<double> solve_sparse(const Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>& solver,
+                                 const std::vector<double>& rhs) {
+    if (solver.info() != Eigen::Success) {
+        throw std::runtime_error("Sparse solver not initialized or failed");
+    }
+    Eigen::Map<const Eigen::VectorXd> b(rhs.data(), rhs.size());
+    Eigen::VectorXd x = solver.solve(b);
+    std::vector<double> result(rhs.size());
+    Eigen::Map<Eigen::VectorXd>(result.data(), rhs.size()) = x;
     return result;
 }
 
@@ -110,11 +138,16 @@ std::vector<double> invert_from_cholesky(std::size_t n, const std::vector<double
     return result;
 }
 
-std::vector<RandomEffectInfo> build_random_effect_infos(
+void build_random_effect_infos(
     const ModelIR& model,
     const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
     const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
-    bool need_gradients) {
+    bool need_gradients,
+    std::vector<RandomEffectInfo>& infos) {
+    
+    infos.clear();
+    infos.reserve(model.random_effects.size());
+
     std::unordered_map<std::string, const CovarianceSpec*> cov_lookup;
     for (const auto& cov : model.covariances) {
         cov_lookup.emplace(cov.id, &cov);
@@ -126,9 +159,6 @@ std::vector<RandomEffectInfo> build_random_effect_infos(
             re_targets[edge.source].push_back(edge.target);
         }
     }
-
-    std::vector<RandomEffectInfo> infos;
-    infos.reserve(model.random_effects.size());
 
     for (const auto& re : model.random_effects) {
         if (re.variables.empty()) {
@@ -149,35 +179,73 @@ std::vector<RandomEffectInfo> build_random_effect_infos(
             params = param_it->second;
         }
 
-        RandomEffectInfo info;
+        infos.emplace_back();
+        RandomEffectInfo& info = infos.back();
+
         info.id = re.id;
         info.grouping_var = re.variables.front();
         info.design_vars.assign(re.variables.begin() + 1, re.variables.end());
         info.covariance_id = re.covariance_id;
         info.cov_spec = cov_it->second;
-        info.G_matrix = structure->materialize(params);
+        
+        if (structure->is_sparse()) {
+            info.is_sparse = true;
+            
+            info.G_sparse = std::make_shared<Eigen::SparseMatrix<double>>(structure->materialize_sparse(params));
+            
+            
+            // info.sparse_solver = std::make_shared<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>();
+            auto solver = std::make_shared<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>();
+            
+            solver->analyzePattern(*info.G_sparse);
+            solver->factorize(*info.G_sparse);
+            
+            if (solver->info() != Eigen::Success) {
+                std::cerr << "Solver info: " << solver->info() << std::endl;
+                throw std::runtime_error("Sparse Cholesky factorization failed for " + re.id);
+            }
+            
+            info.sparse_solver = solver;
+
+            // Log determinant from sparse solver (LDLT)
+            // log|G| = sum(log(D_ii))
+            double log_det = 0.0;
+            
+            Eigen::VectorXd D = info.sparse_solver->vectorD();
+            for (int k=0; k<D.size(); ++k) {
+                log_det += std::log(D[k]);
+            }
+            
+            info.log_det_G = log_det;
+            
+            
+            if (need_gradients && structure->parameter_count() > 0) {
+                info.G_gradients_sparse = structure->parameter_gradients_sparse(params);
+            }
+            
+        } else {
+            info.is_sparse = false;
+            info.G_matrix = structure->materialize(params);
+            
+            if (info.cov_spec->dimension == 0) {
+                throw std::runtime_error("Random effect " + re.id + " has zero-dimensional covariance");
+            }
+
+            std::vector<double> chol(info.cov_spec->dimension * info.cov_spec->dimension);
+            cholesky(info.cov_spec->dimension, info.G_matrix, chol);
+            info.log_det_G = log_det_cholesky(info.cov_spec->dimension, chol);
+            info.G_inverse = invert_from_cholesky(info.cov_spec->dimension, chol);
+
+            if (need_gradients && structure->parameter_count() > 0) {
+                info.G_gradients = structure->parameter_gradients(params);
+            }
+        }
         
         auto target_it = re_targets.find(re.id);
         if (target_it != re_targets.end()) {
             info.target_vars = target_it->second;
         }
-
-        if (info.cov_spec->dimension == 0) {
-            throw std::runtime_error("Random effect " + re.id + " has zero-dimensional covariance");
-        }
-
-        std::vector<double> chol(info.cov_spec->dimension * info.cov_spec->dimension);
-        cholesky(info.cov_spec->dimension, info.G_matrix, chol);
-        info.log_det_G = log_det_cholesky(info.cov_spec->dimension, chol);
-        info.G_inverse = invert_from_cholesky(info.cov_spec->dimension, chol);
-
-        if (need_gradients && structure->parameter_count() > 0) {
-            info.G_gradients = structure->parameter_gradients(params);
-        }
-        infos.push_back(std::move(info));
     }
-
-    return infos;
 }
 
 double trace_product(const std::vector<double>& A,
@@ -348,6 +416,12 @@ struct LaplaceSystemResult {
     std::vector<double> neg_hessian;
     std::vector<double> chol_neg_hessian;
     std::vector<OutcomeEvaluation> evaluations;
+    
+    // Sparse support
+    using SparseSolver = Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>;
+    std::shared_ptr<SparseSolver> sparse_solver;
+    bool use_sparse = false;
+    double log_det_neg_hess = 0.0;
 };
 
 LaplaceSystem build_laplace_system(
@@ -482,7 +556,8 @@ LaplaceSystem build_laplace_system(
     LaplaceSystem system;
     system.observation_entries.resize(n);
     std::size_t offset = 0;
-    for (const auto& info : infos) {
+    for (size_t i = 0; i < infos.size(); ++i) {
+        const auto& info = infos[i];
         auto group_map = build_group_map(info, data, n);
         int group_count = 0;
         for (const auto& [_, indices] : group_map) {
@@ -527,17 +602,40 @@ void compute_system_grad_hess(const LaplaceSystem& system,
 
     for (const auto& block : system.blocks) {
         const auto& info = *block.info;
-        const double* G_inv = info.G_inverse.data();
-        const double* u_block = &u[block.offset];
-        for (std::size_t r = 0; r < block.q; ++r) {
-            double sum = 0.0;
-            for (std::size_t c = 0; c < block.q; ++c) {
-                const std::size_t row_idx = block.offset + r;
-                const std::size_t col_idx = block.offset + c;
-                hess[row_idx * Q + col_idx] -= G_inv[r * block.q + c];
-                sum += G_inv[r * block.q + c] * u_block[c];
+        
+        if (info.is_sparse) {
+             std::cerr << "Sparse block in compute_system_grad_hess" << std::endl;
+             if (!info.sparse_solver) {
+                 std::cerr << "Sparse solver is null!" << std::endl;
+                 throw std::runtime_error("Sparse solver is null");
+             }
+             Eigen::Map<const Eigen::VectorXd> u_vec(&u[block.offset], block.q);
+             Eigen::VectorXd g_inv_u = info.sparse_solver->solve(u_vec);
+             for (int i=0; i<block.q; ++i) {
+                 grad[block.offset + i] -= g_inv_u[i];
+             }
+             
+             for (int i=0; i<block.q; ++i) {
+                 Eigen::VectorXd rhs = Eigen::VectorXd::Zero(block.q);
+                 rhs[i] = 1.0;
+                 Eigen::VectorXd col = info.sparse_solver->solve(rhs);
+                 for (int j=0; j<block.q; ++j) {
+                     hess[(block.offset + j) * Q + (block.offset + i)] -= col[j];
+                 }
+             }
+        } else {
+            const double* G_inv = info.G_inverse.data();
+            const double* u_block = &u[block.offset];
+            for (std::size_t r = 0; r < block.q; ++r) {
+                double sum = 0.0;
+                for (std::size_t c = 0; c < block.q; ++c) {
+                    const std::size_t row_idx = block.offset + r;
+                    const std::size_t col_idx = block.offset + c;
+                    hess[row_idx * Q + col_idx] -= G_inv[r * block.q + c];
+                    sum += G_inv[r * block.q + c] * u_block[c];
+                }
+                grad[block.offset + r] -= sum;
             }
-            grad[block.offset + r] -= sum;
         }
     }
 
@@ -675,24 +773,549 @@ double compute_system_objective(const LaplaceSystem& system,
     // 2. Penalty term: -0.5 * u^T * G^-1 * u
     for (const auto& block : system.blocks) {
         const auto& info = *block.info;
-        const double* G_inv = info.G_inverse.data();
         const double* u_block = &u[block.offset];
-        for (std::size_t r = 0; r < block.q; ++r) {
-            double row_sum = 0.0;
-            for (std::size_t c = 0; c < block.q; ++c) {
-                row_sum += G_inv[r * block.q + c] * u_block[c];
+        
+        if (info.is_sparse) {
+            if (!info.sparse_solver) {
+                throw std::runtime_error("sparse_solver is null in compute_system_objective");
             }
-            loglik -= 0.5 * u_block[r] * row_sum;
+            // u^T G^-1 u = || L^-1 u ||^2 where G = L L^T
+            Eigen::Map<const Eigen::VectorXd> u_vec(u_block, block.q);
+            
+            Eigen::VectorXd y = info.sparse_solver->matrixL().solve(u_vec);
+            loglik -= 0.5 * y.squaredNorm();
+        } else {
+            const double* G_inv = info.G_inverse.data();
+            for (std::size_t r = 0; r < block.q; ++r) {
+                double row_sum = 0.0;
+                for (std::size_t c = 0; c < block.q; ++c) {
+                    row_sum += G_inv[r * block.q + c] * u_block[c];
+                }
+                loglik -= 0.5 * u_block[r] * row_sum;
+            }
         }
     }
 
     return loglik;
 }
 
+void compute_system_grad_hess_sparse(const LaplaceSystem& system,
+                                     const std::vector<double>& u,
+                                     const std::vector<OutcomeData>& outcomes,
+                                     std::vector<double>& grad,
+                                     Eigen::SparseMatrix<double>& neg_hess,
+                                     std::vector<OutcomeEvaluation>* evals_out,
+                                     SparseHessianAccumulator* accumulator = nullptr) {
+    const std::size_t Q = system.total_dim;
+    std::fill(grad.begin(), grad.end(), 0.0);
+    
+    if (accumulator && accumulator->initialized) {
+        // Reset Hessian values to zero
+        for (int k=0; k<accumulator->hessian.outerSize(); ++k) {
+            for (Eigen::SparseMatrix<double>::InnerIterator it(accumulator->hessian, k); it; ++it) {
+                it.valueRef() = 0.0;
+            }
+        }
+        
+        // Add Prior contributions (G^{-1})
+        for (const auto& block : system.blocks) {
+            if (block.info->is_sparse) {
+                // Gradient: G^-1 u
+                Eigen::Map<const Eigen::VectorXd> u_vec(&u[block.offset], block.q);
+                Eigen::VectorXd g_inv_u = block.info->sparse_solver->solve(u_vec);
+                for (int i=0; i<block.q; ++i) {
+                    grad[block.offset + i] -= g_inv_u[i];
+                }
+
+                // Hessian: Add G^-1
+                if (block.info->G_sparse->nonZeros() == block.info->G_sparse->rows()) {
+                     // Diagonal optimization
+                     for (int k=0; k<block.info->G_sparse->outerSize(); ++k) {
+                        for (Eigen::SparseMatrix<double>::InnerIterator it(*block.info->G_sparse, k); it; ++it) {
+                            if (it.row() == it.col()) {
+                                double val = 1.0 / it.value();
+                                accumulator->hessian.coeffRef(block.offset + it.row(), block.offset + it.col()) += val;
+                            }
+                        }
+                     }
+                } else {
+                     // General sparse inverse
+                     for (int i=0; i<block.q; ++i) {
+                         Eigen::VectorXd rhs = Eigen::VectorXd::Zero(block.q);
+                         rhs[i] = 1.0;
+                         Eigen::VectorXd col = block.info->sparse_solver->solve(rhs);
+                         for (int j=0; j<block.q; ++j) {
+                             double val = col[j];
+                             if (val != 0.0) {
+                                 accumulator->hessian.coeffRef(block.offset + j, block.offset + i) += val;
+                             }
+                         }
+                     }
+                }
+            } else {
+                const auto& G_inv = block.info->G_inverse;
+                for (std::size_t r = 0; r < block.q; ++r) {
+                    double sum = 0.0;
+                    for (std::size_t c = 0; c < block.q; ++c) {
+                        double val = G_inv[r * block.q + c];
+                        if (val != 0.0) {
+                            accumulator->hessian.coeffRef(block.offset + r, block.offset + c) += val;
+                        }
+                        sum += val * u[block.offset + c];
+                    }
+                    grad[block.offset + r] -= sum;
+                }
+            }
+        }
+        
+        if (evals_out) evals_out->clear();
+        
+        for (size_t out_idx = 0; out_idx < outcomes.size(); ++out_idx) {
+            const auto& outcome = outcomes[out_idx];
+            const auto& recipe = accumulator->outcome_recipes[out_idx];
+            std::size_t n = outcome.obs.size();
+            
+            for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
+                if (std::isnan(outcome.obs[obs_idx])) {
+                    if (evals_out) evals_out->push_back(OutcomeEvaluation{0.0, 0.0, 0.0, 0.0, 0.0, {}});
+                    continue;
+                }
+                
+                double eta = outcome.pred[obs_idx];
+                const auto& entries = system.observation_entries[obs_idx];
+                
+                std::vector<const LaplaceBlock*> active_blocks;
+                std::vector<std::size_t> active_rows;
+                for (const auto& entry : entries) {
+                    const auto& block = system.blocks[entry.block_index];
+                    bool targets = false;
+                    for (const auto& t : block.info->target_vars) {
+                        if (t == outcome.name) {
+                            targets = true;
+                            break;
+                        }
+                    }
+                    if (targets) {
+                        active_blocks.push_back(&block);
+                        active_rows.push_back(entry.row_index);
+                        const double* z_row = &block.design_matrix[entry.row_index * block.q];
+                        const double* u_block = &u[block.offset];
+                        for (std::size_t j = 0; j < block.q; ++j) {
+                            eta += z_row[j] * u_block[j];
+                        }
+                    }
+                }
+
+                const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
+                auto eval = outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra);
+                if (evals_out) evals_out->push_back(eval);
+
+                for (std::size_t i = 0; i < active_blocks.size(); ++i) {
+                    const auto* block = active_blocks[i];
+                    std::size_t row = active_rows[i];
+                    const double* z_row = &block->design_matrix[row * block->q];
+                    double* grad_block = &grad[block->offset];
+                    for (std::size_t j = 0; j < block->q; ++j) {
+                        grad_block[j] += z_row[j] * eval.first_derivative;
+                    }
+                }
+
+                double w = -eval.second_derivative;
+                const auto& obs_recipe = recipe.obs_recipes[obs_idx];
+                for (const auto& item : obs_recipe) {
+                    double val = w * item.z_product;
+                    accumulator->hessian.coeffRef(item.row_idx, item.col_idx) += val;
+                    if (item.row_idx != item.col_idx) {
+                        accumulator->hessian.coeffRef(item.col_idx, item.row_idx) += val;
+                    }
+                }
+            }
+        }
+        
+        neg_hess = accumulator->hessian;
+        return;
+    }
+
+    neg_hess.setZero();
+    std::vector<Eigen::Triplet<double>> triplets;
+    
+    {
+        for (const auto& block : system.blocks) {
+            if (block.info->is_sparse) {
+                // Gradient: G^-1 u
+                Eigen::Map<const Eigen::VectorXd> u_vec(&u[block.offset], block.q);
+                Eigen::VectorXd g_inv_u = block.info->sparse_solver->solve(u_vec);
+                for (int i=0; i<block.q; ++i) {
+                    grad[block.offset + i] -= g_inv_u[i];
+                }
+
+                // Hessian: Add G^-1
+                if (block.info->G_sparse->nonZeros() == block.info->G_sparse->rows()) {
+                     // Diagonal optimization
+                     for (int k=0; k<block.info->G_sparse->outerSize(); ++k) {
+                        for (Eigen::SparseMatrix<double>::InnerIterator it(*block.info->G_sparse, k); it; ++it) {
+                            if (it.row() == it.col()) {
+                                double val = 1.0 / it.value();
+                                triplets.emplace_back(block.offset + it.row(), block.offset + it.col(), val);
+                            }
+                        }
+                     }
+                } else {
+                     // General sparse inverse
+                     for (int i=0; i<block.q; ++i) {
+                         Eigen::VectorXd rhs = Eigen::VectorXd::Zero(block.q);
+                         rhs[i] = 1.0;
+                         Eigen::VectorXd col = block.info->sparse_solver->solve(rhs);
+                         for (int j=0; j<block.q; ++j) {
+                             double val = col[j];
+                             if (val != 0.0) {
+                                 triplets.emplace_back(block.offset + j, block.offset + i, val);
+                             }
+                         }
+                     }
+                }
+            } else {
+                const auto& info = *block.info;
+                const double* G_inv = info.G_inverse.data();
+                const double* u_block = &u[block.offset];
+                for (std::size_t r = 0; r < block.q; ++r) {
+                    double sum = 0.0;
+                    for (std::size_t c = 0; c < block.q; ++c) {
+                        double val = G_inv[r * block.q + c];
+                        if (val != 0.0) triplets.emplace_back(block.offset + r, block.offset + c, val);
+                        sum += val * u_block[c];
+                    }
+                    grad[block.offset + r] -= sum;
+                }
+            }
+        }
+
+        if (evals_out) evals_out->clear();
+
+        for (size_t out_idx = 0; out_idx < outcomes.size(); ++out_idx) {
+            const auto& outcome = outcomes[out_idx];
+            std::size_t n = outcome.obs.size();
+            for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
+                if (std::isnan(outcome.obs[obs_idx])) {
+                    if (evals_out) {
+                        evals_out->push_back(OutcomeEvaluation{0.0, 0.0, 0.0, 0.0, 0.0, {}});
+                    }
+                    continue;
+                }
+
+                double eta = outcome.pred[obs_idx];
+                const auto& entries = system.observation_entries[obs_idx];
+                
+                std::vector<const LaplaceBlock*> active_blocks;
+                std::vector<std::size_t> active_rows;
+                for (const auto& entry : entries) {
+                    const auto& block = system.blocks[entry.block_index];
+                    bool targets = false;
+                    for (const auto& t : block.info->target_vars) {
+                        if (t == outcome.name) {
+                            targets = true;
+                            break;
+                        }
+                    }
+                    if (targets) {
+                        active_blocks.push_back(&block);
+                        active_rows.push_back(entry.row_index);
+                        const double* z_row = &block.design_matrix[entry.row_index * block.q];
+                        const double* u_block = &u[block.offset];
+                        for (std::size_t j = 0; j < block.q; ++j) {
+                            eta += z_row[j] * u_block[j];
+                        }
+                    }
+                }
+
+                const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
+                auto eval = outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra);
+                if (evals_out) evals_out->push_back(eval);
+
+                for (std::size_t i = 0; i < active_blocks.size(); ++i) {
+                    const auto* block = active_blocks[i];
+                    std::size_t row = active_rows[i];
+                    const double* z_row = &block->design_matrix[row * block->q];
+                    double* grad_block = &grad[block->offset];
+                    for (std::size_t j = 0; j < block->q; ++j) {
+                        grad_block[j] += z_row[j] * eval.first_derivative;
+                    }
+                }
+
+                double w = -eval.second_derivative;
+                for (std::size_t a = 0; a < active_blocks.size(); ++a) {
+                    const auto* block_a = active_blocks[a];
+                    std::size_t row_a = active_rows[a];
+                    const double* z_a = &block_a->design_matrix[row_a * block_a->q];
+                    
+                    for (std::size_t b = a; b < active_blocks.size(); ++b) {
+                        const auto* block_b = active_blocks[b];
+                        std::size_t row_b = active_rows[b];
+                        const double* z_b = &block_b->design_matrix[row_b * block_b->q];
+                        
+                        for (std::size_t r = 0; r < block_a->q; ++r) {
+                            for (std::size_t c = 0; c < block_b->q; ++c) {
+                                double val = w * z_a[r] * z_b[c];
+                                int row_idx = block_a->offset + r;
+                                int col_idx = block_b->offset + c;
+                                triplets.emplace_back(row_idx, col_idx, val);
+                                if (row_idx != col_idx) {
+                                    triplets.emplace_back(col_idx, row_idx, val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    neg_hess.setFromTriplets(triplets.begin(), triplets.end());
+}
+
+
+bool solve_laplace_system_sparse(const LaplaceSystem& system,
+                                 const std::vector<OutcomeData>& outcomes,
+                                 LaplaceSystemResult& result,
+                                 SparseHessianAccumulator* accumulator = nullptr) {
+    const std::size_t Q = system.total_dim;
+    std::vector<double> u(Q, 0.0);
+    std::vector<double> grad(Q, 0.0);
+    Eigen::SparseMatrix<double> neg_hess(Q, Q);
+    std::vector<double> delta(Q, 0.0);
+    std::vector<double> u_new(Q, 0.0);
+
+    constexpr int kMaxIter = 100;
+    constexpr double kDampingInit = 1e-3;
+    constexpr double kDampingMax = 1e2;
+
+    if (result.u.size() == Q) {
+        u = result.u;
+    }
+
+    // Initialize accumulator structure if needed
+    if (accumulator && !accumulator->initialized) {
+        // std::cout << "Initializing accumulator..." << std::endl;
+        std::vector<Eigen::Triplet<double>> triplets;
+        
+        // Prior structure (G^{-1})
+        for (const auto& block : system.blocks) {
+            if (block.info->is_sparse) {
+                /*
+                const auto& G = block.info->G_sparse;
+                for (int k=0; k<G.outerSize(); ++k) {
+                    for (Eigen::SparseMatrix<double>::InnerIterator it(G, k); it; ++it) {
+                        if (it.row() == it.col()) {
+                            triplets.emplace_back(block.offset + it.row(), block.offset + it.col(), 1.0);
+                        }
+                    }
+                }
+                */
+            } else {
+                const auto& G_inv = block.info->G_inverse;
+                for (std::size_t r = 0; r < block.q; ++r) {
+                    for (std::size_t c = 0; c < block.q; ++c) {
+                        if (G_inv[r * block.q + c] != 0.0) {
+                            triplets.emplace_back(block.offset + r, block.offset + c, 1.0);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Observation structure
+        accumulator->outcome_recipes.resize(outcomes.size());
+        for (size_t out_idx = 0; out_idx < outcomes.size(); ++out_idx) {
+            const auto& outcome = outcomes[out_idx];
+            auto& recipe = accumulator->outcome_recipes[out_idx];
+            std::size_t n = outcome.obs.size();
+            recipe.obs_recipes.resize(n);
+            
+            for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
+                if (std::isnan(outcome.obs[obs_idx])) continue;
+                
+                const auto& entries = system.observation_entries[obs_idx];
+                std::vector<const LaplaceBlock*> active_blocks;
+                std::vector<std::size_t> active_rows;
+                for (const auto& entry : entries) {
+                    const auto& block = system.blocks[entry.block_index];
+                    bool targets = false;
+                    for (const auto& t : block.info->target_vars) {
+                        if (t == outcome.name) {
+                            targets = true;
+                            break;
+                        }
+                    }
+                    if (targets) {
+                        active_blocks.push_back(&block);
+                        active_rows.push_back(entry.row_index);
+                    }
+                }
+                
+                for (std::size_t a = 0; a < active_blocks.size(); ++a) {
+                    const auto* block_a = active_blocks[a];
+                    std::size_t row_a = active_rows[a];
+                    const double* z_a = &block_a->design_matrix[row_a * block_a->q];
+                    
+                    for (std::size_t b = a; b < active_blocks.size(); ++b) {
+                        const auto* block_b = active_blocks[b];
+                        std::size_t row_b = active_rows[b];
+                        const double* z_b = &block_b->design_matrix[row_b * block_b->q];
+                        
+                        for (std::size_t r = 0; r < block_a->q; ++r) {
+                            for (std::size_t c = 0; c < block_b->q; ++c) {
+                                double z_prod = z_a[r] * z_b[c];
+                                int row_idx = block_a->offset + r;
+                                int col_idx = block_b->offset + c;
+                                
+                                recipe.obs_recipes[obs_idx].push_back({row_idx, col_idx, z_prod});
+                                triplets.emplace_back(row_idx, col_idx, 1.0);
+                                if (row_idx != col_idx) {
+                                    triplets.emplace_back(col_idx, row_idx, 1.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        accumulator->hessian.resize(Q, Q);
+        accumulator->hessian.setFromTriplets(triplets.begin(), triplets.end());
+        accumulator->initialized = true;
+        
+        // Analyze pattern once
+        accumulator->solver.analyzePattern(accumulator->hessian);
+    }
+
+    double current_obj = compute_system_objective(system, u, outcomes);
+    
+    // Use local solver if accumulator not provided (or use accumulator's solver)
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>* solver_ptr = nullptr;
+    
+    if (accumulator) {
+        // Create a shared_ptr that doesn't delete the object, as it's owned by accumulator
+        result.sparse_solver = std::shared_ptr<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>(&accumulator->solver, [](Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>*){});
+        solver_ptr = &accumulator->solver;
+    } else {
+        if (!result.sparse_solver) {
+            result.sparse_solver = std::make_shared<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>();
+        }
+        solver_ptr = result.sparse_solver.get();
+    }
+    auto& solver = *solver_ptr;
+    std::cerr << "Starting Newton iterations in solve_laplace_system_sparse" << std::endl;
+
+    for (int iter = 0; iter < kMaxIter; ++iter) {
+        std::cerr << "Iter: " << iter << std::endl;
+        compute_system_grad_hess_sparse(system, u, outcomes, grad, neg_hess, (iter == 0) ? nullptr : &result.evaluations, accumulator);
+        std::cerr << "Computed grad and hess" << std::endl;
+        
+        double damping = 0.0;
+        bool success = false;
+        
+        {
+            if (accumulator) {
+                std::cerr << "Factorizing with accumulator" << std::endl;
+                solver.factorize(neg_hess);
+            } else {
+                std::cerr << "Computing with local solver" << std::endl;
+                solver.compute(neg_hess);
+            }
+        }
+        std::cerr << "Solver info: " << solver.info() << std::endl;
+        if (solver.info() == Eigen::Success) {
+            success = true;
+        } else {
+            damping = kDampingInit;
+        }
+        
+        while (!success && damping <= kDampingMax) {
+            Eigen::SparseMatrix<double> damped = neg_hess;
+            for (int k=0; k<damped.outerSize(); ++k) {
+                for (Eigen::SparseMatrix<double>::InnerIterator it(damped, k); it; ++it) {
+                    if (it.row() == it.col()) {
+                        it.valueRef() += damping;
+                    }
+                }
+            }
+            
+            {
+                solver.factorize(damped);
+            }
+            if (solver.info() == Eigen::Success) {
+                success = true;
+            } else {
+                damping *= 10.0;
+            }
+        }
+
+        if (!success) return false;
+
+        Eigen::Map<Eigen::VectorXd> grad_vec(grad.data(), Q);
+        Eigen::VectorXd delta_vec = solver.solve(grad_vec);
+        Eigen::Map<Eigen::VectorXd>(delta.data(), Q) = delta_vec;
+
+        double step = 1.0;
+        bool improved = false;
+        while (step > 1e-4) {
+            for (std::size_t i = 0; i < Q; ++i) {
+                u_new[i] = u[i] + step * delta[i];
+            }
+            double new_obj = compute_system_objective(system, u_new, outcomes);
+            if (new_obj > current_obj + 1e-8) {
+                u = u_new;
+                current_obj = new_obj;
+                improved = true;
+                break;
+            }
+            step *= 0.5;
+        }
+
+        if (!improved && step <= 1e-4) {
+            break;
+        }
+    }
+    
+    result.u = u;
+    result.use_sparse = true;
+    
+    // Ensure evaluations are populated for the final u
+    compute_system_grad_hess_sparse(system, u, outcomes, grad, neg_hess, &result.evaluations, accumulator);
+    
+    // Compute log determinant
+    double log_det = 0.0;
+    if (solver.info() == Eigen::Success) {
+        Eigen::VectorXd D = solver.vectorD();
+        for (int i = 0; i < D.size(); ++i) {
+            log_det += std::log(D[i]);
+        }
+    } else {
+        log_det = std::numeric_limits<double>::infinity();
+    }
+    result.log_det_neg_hess = log_det;
+    
+    return true;
+}
+
 bool solve_laplace_system(const LaplaceSystem& system,
                           const std::vector<OutcomeData>& outcomes,
-                          LaplaceSystemResult& result) {
+                          LaplaceSystemResult& result,
+                          SparseHessianAccumulator* accumulator = nullptr) {
     const std::size_t Q = system.total_dim;
+    
+    bool any_sparse = false;
+    for (const auto& block : system.blocks) {
+        if (block.info->is_sparse) {
+            any_sparse = true;
+            break;
+        }
+    }
+
+    if (accumulator || any_sparse) {
+        return solve_laplace_system_sparse(system, outcomes, result, accumulator);
+    }
+
     std::vector<double> u(Q, 0.0);
     std::vector<double> grad(Q, 0.0);
     std::vector<double> hess(Q * Q, 0.0);
@@ -796,6 +1419,10 @@ bool solve_laplace_system(const LaplaceSystem& system,
     } catch (...) {
         return false;
     }
+    
+    result.use_sparse = false;
+    result.log_det_neg_hess = log_det_cholesky(Q, result.chol_neg_hessian);
+    
     return true;
 }
 
@@ -838,24 +1465,49 @@ double compute_prior_loglik(const LaplaceSystem& system,
         for (std::size_t j = 0; j < block.q; ++j) {
             u_block[j] = result.u[block.offset + j];
         }
-        double quad = quadratic_form(u_block, info.G_inverse, block.q);
+
+        double quad;
+        if (info.is_sparse) {
+            if (!info.sparse_solver) {
+                throw std::runtime_error("sparse_solver is null in compute_prior_loglik");
+            }
+            Eigen::Map<const Eigen::VectorXd> u_vec(u_block.data(), block.q);
+            Eigen::VectorXd x = info.sparse_solver->solve(u_vec);
+            quad = u_vec.dot(x);
+        } else {
+            quad = quadratic_form(u_block, info.G_inverse, block.q);
+        }
         total += -0.5 * (block.q * log_2pi + info.log_det_G + quad);
     }
     return total;
 }
 
 std::vector<double> compute_observation_quad_terms(const LaplaceSystem& system,
-                                                   const std::vector<double>& neg_hess_inv,
+                                                   const LaplaceSystemResult& result,
                                                    std::string_view target_var) {
     const std::size_t Q = system.total_dim;
     const std::size_t n = system.observation_entries.size();
     std::vector<double> buffer(Q, 0.0);
     std::vector<double> quads(n, 0.0);
+    
+    std::vector<double> neg_hess_inv;
+    if (!result.use_sparse) {
+        neg_hess_inv = invert_from_cholesky(Q, result.chol_neg_hessian);
+    }
+
     for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
         std::fill(buffer.begin(), buffer.end(), 0.0);
+        bool has_entries = false;
         for (const auto& entry : system.observation_entries[obs_idx]) {
+            if (entry.block_index >= system.blocks.size()) {
+                continue;
+            }
             const auto& block = system.blocks[entry.block_index];
             
+            if (!block.info) {
+                continue;
+            }
+
             bool targets = false;
             for (const auto& t : block.info->target_vars) {
                 if (t == target_var) {
@@ -865,21 +1517,41 @@ std::vector<double> compute_observation_quad_terms(const LaplaceSystem& system,
             }
             if (!targets) continue;
 
+            if (entry.row_index * block.q >= block.design_matrix.size()) {
+                 std::cerr << "Design matrix access out of bounds" << std::endl;
+                 continue;
+            }
+
             const double* z_row = &block.design_matrix[entry.row_index * block.q];
             for (std::size_t j = 0; j < block.q; ++j) {
+                if (block.offset + j >= buffer.size()) {
+                    std::cerr << "Buffer access out of bounds" << std::endl;
+                    continue;
+                }
                 buffer[block.offset + j] = z_row[j];
             }
+            has_entries = true;
         }
-        double quad = 0.0;
-        for (std::size_t i = 0; i < Q; ++i) {
-            if (buffer[i] == 0.0) continue;
-            for (std::size_t j = 0; j < Q; ++j) {
-                if (buffer[j] == 0.0) continue;
-                quad += buffer[i] * neg_hess_inv[i * Q + j] * buffer[j];
+        
+        if (!has_entries) continue;
+
+        if (result.use_sparse) {
+            Eigen::Map<Eigen::VectorXd> z_vec(buffer.data(), Q);
+            Eigen::VectorXd v = result.sparse_solver->solve(z_vec);
+            quads[obs_idx] = z_vec.dot(v);
+        } else {
+            double quad = 0.0;
+            for (std::size_t i = 0; i < Q; ++i) {
+                if (buffer[i] == 0.0) continue;
+                for (std::size_t j = 0; j < Q; ++j) {
+                    if (buffer[j] == 0.0) continue;
+                    quad += buffer[i] * neg_hess_inv[i * Q + j] * buffer[j];
+                }
             }
+            quads[obs_idx] = quad;
         }
-        quads[obs_idx] = quad;
     }
+    std::cerr << "Finished compute_observation_quad_terms" << std::endl;
     return quads;
 }
 
@@ -1043,7 +1715,8 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
                                                 const std::unordered_map<std::string, std::vector<double>>& status,
                                                 const std::unordered_map<std::string, std::vector<double>>& extra_params,
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
-                                                EstimationMethod method) const {
+                                                EstimationMethod method,
+                                                bool force_laplace) const {
     
     if (model.random_effects.empty()) {
         double total = 0.0;
@@ -1171,12 +1844,12 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
                 }
             }
         }
-        std::cerr << "Total LL: " << total << std::endl;
         return total;
     }
 
     // Mixed model logic
-    auto random_effect_infos = build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, false);
+    std::vector<RandomEffectInfo> random_effect_infos;
+    build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, false, random_effect_infos);
     if (random_effect_infos.empty()) {
         throw std::runtime_error("Random effect metadata missing");
     }
@@ -1199,7 +1872,7 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
     }
     
     for (const auto& var : model.variables) {
-        if (var.kind == VariableKind::Observed && !var.family.empty()) {
+        if (var.kind == VariableKind::Observed && !var.family.empty() && var.family != "fixed") {
             if (outcome_set.find(var.name) == outcome_set.end()) {
                 outcome_vars.push_back(var.name);
                 outcome_set.insert(var.name);
@@ -1272,6 +1945,7 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
 
     LaplaceSystemResult laplace_result;
     if (!solve_laplace_system(system, outcomes, laplace_result)) {
+        std::cerr << "solve_laplace_system failed!" << std::endl;
         return -std::numeric_limits<double>::infinity();
     }
 
@@ -1280,9 +1954,39 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
     for (const auto& eval : laplace_result.evaluations) {
         log_lik_data += eval.log_likelihood;
     }
-    double log_det_neg_hess = log_det_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
+    double log_det_neg_hess = laplace_result.log_det_neg_hess;
     double total_loglik = log_prior + log_lik_data + 0.5 * system.total_dim * log_2pi - 0.5 * log_det_neg_hess;
+
     return total_loglik;
+}
+
+std::vector<double> get_inverse_block(const LaplaceSystemResult& result, const LaplaceBlock& block, std::size_t Q) {
+    std::size_t sz = block.q * block.q;
+    std::vector<double> inv_block(sz);
+    
+    bool sparse = result.use_sparse;
+
+    if (sparse) {
+        for (std::size_t k = 0; k < block.q; ++k) {
+            Eigen::VectorXd rhs(Q);
+            rhs.setZero();
+            rhs[block.offset + k] = 1.0;
+            Eigen::VectorXd sol = result.sparse_solver->solve(rhs);
+            for (std::size_t r = 0; r < block.q; ++r) {
+                inv_block[r * block.q + k] = sol[block.offset + r];
+            }
+        }
+    } else {
+        for (std::size_t k = 0; k < block.q; ++k) {
+            std::vector<double> rhs(Q, 0.0);
+            rhs[block.offset + k] = 1.0;
+            std::vector<double> sol = solve_cholesky(Q, result.chol_neg_hessian, rhs);
+            for (std::size_t r = 0; r < block.q; ++r) {
+                inv_block[r * block.q + k] = sol[block.offset + r];
+            }
+        }
+    }
+    return inv_block;
 }
 
 std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradient(const ModelIR& model,
@@ -1296,7 +2000,9 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                                                 EstimationMethod method,
                                                 const std::unordered_map<std::string, DataParamMapping>& data_param_mappings,
                                                 const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
-                                                const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
+                                                const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings,
+                                                bool force_laplace) const {
+    
     std::unordered_map<std::string, double> gradients;
     (void)method;
 
@@ -1400,7 +2106,8 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
         }
         return gradients;
     } else {
-        auto random_effect_infos = build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, true);
+        std::vector<RandomEffectInfo> random_effect_infos;
+        build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, true, random_effect_infos);
         if (random_effect_infos.empty()) {
             throw std::runtime_error("Random effect metadata missing");
         }
@@ -1472,7 +2179,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
         }
         const auto& disp_data = *disp_ptr;
 
-        if (obs_family_name == "gaussian") {
+        if (obs_family_name == "gaussian" && !force_laplace) {
             std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
             group_maps.reserve(random_effect_infos.size());
             for (const auto& info : random_effect_infos) {
@@ -1493,13 +2200,21 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                     std::size_t q = info.cov_spec->dimension;
 
                     std::vector<double> ZG(n_i * q, 0.0);
-                    for (std::size_t r = 0; r < n_i; ++r) {
-                        for (std::size_t c = 0; c < q; ++c) {
-                            double sum = 0.0;
-                            for (std::size_t k = 0; k < q; ++k) {
-                                sum += Z_i[r * q + k] * info.G_matrix[k * q + c];
+                    if (info.is_sparse) {
+                        if (!info.G_sparse) throw std::runtime_error("G_sparse is null");
+                        Eigen::Map<const RowMajorMatrix> Z_map(Z_i.data(), n_i, q);
+                        Eigen::MatrixXd Z_dense = Z_map;
+                        Eigen::MatrixXd ZG_eigen = Z_dense * *info.G_sparse;
+                        Eigen::Map<RowMajorMatrix>(ZG.data(), n_i, q) = ZG_eigen;
+                    } else {
+                        for (std::size_t r = 0; r < n_i; ++r) {
+                            for (std::size_t c = 0; c < q; ++c) {
+                                double sum = 0.0;
+                                for (std::size_t k = 0; k < q; ++k) {
+                                    sum += Z_i[r * q + k] * info.G_matrix[k * q + c];
+                                }
+                                ZG[r * q + c] = sum;
                             }
-                            ZG[r * q + c] = sum;
                         }
                     }
 
@@ -1587,7 +2302,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                     if(data_param_mappings.count(v)) { has_active_data = true; break; }
                 }
 
-                if (info.G_gradients.empty() && !has_active_data) continue;
+                if (info.G_gradients.empty() && info.G_gradients_sparse.empty() && !has_active_data) continue;
                 
                 const auto& groups = group_maps[re_idx];
                 for (const auto& [_, indices] : groups) {
@@ -1613,7 +2328,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                         }
                     }
 
-                    if (!info.G_gradients.empty()) {
+                    if (!info.G_gradients.empty() || !info.G_gradients_sparse.empty()) {
                         std::vector<double> M(q * q, 0.0);
                         for (std::size_t r = 0; r < q; ++r) {
                             for (std::size_t c = 0; c < q; ++c) {
@@ -1625,16 +2340,30 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                             }
                         }
 
-                        for (std::size_t k = 0; k < info.G_gradients.size(); ++k) {
-                            const auto& dG = info.G_gradients[k];
-                            double trace = 0.0;
-                            for (std::size_t r = 0; r < q; ++r) {
-                                for (std::size_t c = 0; c < q; ++c) {
-                                    trace += M[r * q + c] * dG[c * q + r];
+                        if (info.is_sparse) {
+                             for (std::size_t k = 0; k < info.G_gradients_sparse.size(); ++k) {
+                                const auto& dG = info.G_gradients_sparse[k];
+                                double trace = 0.0;
+                                for (int j=0; j<dG.outerSize(); ++j) {
+                                    for (Eigen::SparseMatrix<double>::InnerIterator it(dG, j); it; ++it) {
+                                        trace += M[it.col() * q + it.row()] * it.value();
+                                    }
                                 }
+                                std::string param_name = info.covariance_id + "_" + std::to_string(k);
+                                gradients[param_name] += 0.5 * trace;
+                             }
+                        } else {
+                            for (std::size_t k = 0; k < info.G_gradients.size(); ++k) {
+                                const auto& dG = info.G_gradients[k];
+                                double trace = 0.0;
+                                for (std::size_t r = 0; r < q; ++r) {
+                                    for (std::size_t c = 0; c < q; ++c) {
+                                        trace += M[r * q + c] * dG[c * q + r];
+                                    }
+                                }
+                                std::string param_name = info.covariance_id + "_" + std::to_string(k);
+                                gradients[param_name] += 0.5 * trace;
                             }
-                            std::string param_name = info.covariance_id + "_" + std::to_string(k);
-                            gradients[param_name] += 0.5 * trace;
                         }
                     }
                     
@@ -1651,8 +2380,14 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                                         const std::string& pid = mapping.pattern[idx];
                                         if (!pid.empty()) {
                                             double val = 0.0;
-                                            for (std::size_t k = 0; k < q; ++k) {
-                                                val += temp[r * q + k] * info.G_matrix[k * q + c];
+                                            if (info.is_sparse) {
+                                                for (Eigen::SparseMatrix<double>::InnerIterator it(*info.G_sparse, c); it; ++it) {
+                                                    val += temp[r * q + it.row()] * it.value();
+                                                }
+                                            } else {
+                                                for (std::size_t k = 0; k < q; ++k) {
+                                                    val += temp[r * q + k] * info.G_matrix[k * q + c];
+                                                }
                                             }
                                             gradients[pid] += val;
                                         }
@@ -1708,8 +2443,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
             }
         }
 
-        std::vector<double> neg_hess_inv = invert_from_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
-        auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, obs_var_name);
+        auto quad_terms = compute_observation_quad_terms(system, laplace_result, obs_var_name);
         std::vector<double> forcing(system.total_dim, 0.0);
 
         for (const auto& edge : model.edges) {
@@ -1727,7 +2461,14 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                 weights[i] = laplace_result.evaluations[i].second_derivative * src_vec[i];
             }
             accumulate_weighted_forcing(system, weights, forcing);
-            auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            std::vector<double> du(system.total_dim);
+            if (laplace_result.use_sparse) {
+                Eigen::Map<Eigen::VectorXd> f_vec(forcing.data(), system.total_dim);
+                Eigen::VectorXd du_vec = laplace_result.sparse_solver->solve(f_vec);
+                Eigen::Map<Eigen::VectorXd>(du.data(), system.total_dim) = du_vec;
+            } else {
+                du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            }
             auto z_dot_du = project_observations(system, du, obs_var_name);
 
             double accum = 0.0;
@@ -1781,7 +2522,14 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                 for (std::size_t j = 0; j < block.q; ++j) {
                     forcing[block.offset + j] = block_forcing[j];
                 }
-                auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+                std::vector<double> du(system.total_dim);
+                if (laplace_result.use_sparse) {
+                    Eigen::Map<Eigen::VectorXd> f_vec(forcing.data(), system.total_dim);
+                    Eigen::VectorXd du_vec = laplace_result.sparse_solver->solve(f_vec);
+                    Eigen::Map<Eigen::VectorXd>(du.data(), system.total_dim) = du_vec;
+                } else {
+                    du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+                }
                 auto z_dot_du = project_observations(system, du, obs_var_name);
 
                 double logdet_adjust = 0.0;
@@ -1791,11 +2539,10 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
 
                 double prior_term = 0.5 * quadratic_form(u_block, cache.Ginv_dG_Ginv, block.q) - 0.5 * cache.trace_Ginv_dG;
                 double trace_term = 0.0;
+                std::vector<double> inv_block = get_inverse_block(laplace_result, block, Q);
                 for (std::size_t r = 0; r < block.q; ++r) {
                     for (std::size_t c = 0; c < block.q; ++c) {
-                        const std::size_t row_idx = block.offset + r;
-                        const std::size_t col_idx = block.offset + c;
-                        trace_term += neg_hess_inv[row_idx * Q + col_idx] * cache.Ginv_dG_Ginv[c * block.q + r];
+                        trace_term += inv_block[r * block.q + c] * cache.Ginv_dG_Ginv[c * block.q + r];
                     }
                 }
                 double logdet_term = 0.5 * trace_term + logdet_adjust;
@@ -1816,12 +2563,12 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     const std::unordered_map<std::string, std::vector<double>>& status,
     const std::unordered_map<std::string, std::vector<double>>& extra_params,
     const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
-    EstimationMethod method,
-    const std::unordered_map<std::string, DataParamMapping>& data_param_mappings,
-    const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
-    const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
-
-    std::unordered_map<std::string, double> gradients;
+                                                EstimationMethod method,
+                                                const std::unordered_map<std::string, DataParamMapping>& data_param_mappings,
+                                                const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
+                                                const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings,
+                                                bool force_laplace,
+                                                SparseHessianAccumulator* sparse_accumulator) const {    std::unordered_map<std::string, double> gradients;
     double total_loglik = 0.0;
 
     if (model.random_effects.empty()) {
@@ -1950,17 +2697,23 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 }
             }
         }
-        std::cerr << "Total LL (Grad): " << total_loglik << std::endl;
         return {total_loglik, gradients};
     }
 
     // Mixed model logic
-    auto random_effect_infos = build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, true);
+    std::cerr << "Entering mixed model logic" << std::endl;
+    std::vector<RandomEffectInfo> random_effect_infos;
+    std::cerr << "Calling build_random_effect_infos" << std::endl;
+    build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, true, random_effect_infos);
+    std::cerr << "Returned from build_random_effect_infos. Size: " << random_effect_infos.size() << std::endl;
+    
     if (random_effect_infos.empty()) {
         throw std::runtime_error("Random effect metadata missing");
     }
+    std::cerr << "Random effect infos built: " << random_effect_infos.size() << std::endl;
 
     std::vector<std::string> all_outcome_vars;
+    std::cerr << "Identifying outcome vars" << std::endl;
     for (const auto& var : model.variables) {
         if (var.kind == VariableKind::Observed) {
             bool is_target = false;
@@ -1975,17 +2728,20 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
             }
         }
     }
+    std::cerr << "Identified outcome vars: " << all_outcome_vars.size() << std::endl;
 
     std::string obs_var_name;
     std::string obs_family_name;
     if (!all_outcome_vars.empty()) {
         obs_var_name = all_outcome_vars[0];
+        std::cerr << "Obs var name: " << obs_var_name << std::endl;
         auto it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v){ return v.name == obs_var_name; });
         
         if (it == model.variables.end()) {
              throw std::runtime_error("Outcome variable not found in model variables: " + obs_var_name);
         }
         obs_family_name = it->family;
+        std::cerr << "Obs family name: " << obs_family_name << std::endl;
     } else {
         for (const auto& var : model.variables) {
             if (var.kind == VariableKind::Observed) {
@@ -1999,8 +2755,17 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         throw std::runtime_error("No observed variable found");
     }
 
+    std::cerr << "Address of linear_predictors in evaluate: " << &linear_predictors << std::endl;
+    std::cerr << "Linear predictors map size: " << linear_predictors.size() << std::endl;
+    for (const auto& [k, v] : linear_predictors) {
+        std::cerr << "Key: " << k << " Size: " << v.size() << std::endl;
+    }
+
+    std::cerr << "Finding linear predictors for " << obs_var_name << std::endl;
     auto pred_it = linear_predictors.find(obs_var_name);
+    std::cerr << "Find returned iterator" << std::endl;
     if (pred_it == linear_predictors.end()) {
+        std::cerr << "Predictor not found, checking fallback" << std::endl;
         if (linear_predictors.size() == 1) {
             obs_var_name = linear_predictors.begin()->first;
             auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
@@ -2015,23 +2780,55 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
             throw std::runtime_error("Linear predictors for outcome variable not found");
         }
     }
+    std::cerr << "Accessing pred_data" << std::endl;
     const auto& pred_data = pred_it->second;
+    std::cerr << "Pred data size: " << pred_data.size() << std::endl;
 
-    auto obs_it = data.find(obs_var_name);
+    std::cerr << "Address of data: " << &data << std::endl;
+    std::cerr << "Data size: " << data.size() << std::endl;
+    std::cerr << "Finding obs var in data: " << obs_var_name << std::endl;
+    auto obs_it = data.end();
+    for (auto it = data.begin(); it != data.end(); ++it) {
+        std::cerr << "Checking key: " << it->first << std::endl;
+        if (it->first == obs_var_name) {
+            std::cerr << "Found match!" << std::endl;
+            obs_it = it;
+            break;
+        }
+    }
+    std::cerr << "Finished search loop" << std::endl;
+    // auto obs_it = data.find(obs_var_name);
     if (obs_it == data.end()) {
         throw std::runtime_error("Observed variable not found in data: " + obs_var_name);
     }
+    std::cerr << "Accessing obs_data" << std::endl;
     const auto& obs_data = obs_it->second;
+    std::cerr << "Obs data size: " << obs_data.size() << std::endl;
 
     if (obs_data.size() != pred_data.size()) {
         throw std::runtime_error("Outcome data and predictors have mismatched sizes");
     }
     std::size_t n = obs_data.size();
 
-    auto disp_it = dispersions.find(obs_var_name);
+    std::cerr << "Finding dispersions for " << obs_var_name << std::endl;
+    std::cerr << "Address of dispersions: " << &dispersions << std::endl;
+    std::cerr << "Dispersions size: " << dispersions.size() << std::endl;
+    if (!dispersions.empty()) {
+        std::cerr << "First key: " << dispersions.begin()->first << std::endl;
+    }
+    auto disp_it = dispersions.end();
+    for (auto it = dispersions.begin(); it != dispersions.end(); ++it) {
+        std::cerr << "Checking dispersion key: " << it->first << std::endl;
+        if (it->first == obs_var_name) {
+            disp_it = it;
+            break;
+        }
+    }
+    // auto disp_it = dispersions.find(obs_var_name);
     if (disp_it == dispersions.end()) {
         throw std::runtime_error("Dispersions not found for: " + obs_var_name);
     }
+    std::cerr << "Found dispersion for " << obs_var_name << std::endl;
     const auto& disp_raw = disp_it->second;
     if (disp_raw.empty()) {
         throw std::runtime_error("Dispersion vector is empty");
@@ -2045,21 +2842,32 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         throw std::runtime_error("Dispersion vector has mismatched size");
     }
     const auto& disp_data = *disp_ptr;
+    std::cerr << "Dispersion data ready" << std::endl;
 
     const double log_2pi = std::log(2.0 * 3.14159265358979323846);
 
     // Identify fixed effect predictors for REML adjustments
     std::vector<std::string> fixed_effect_vars;
     if (method == EstimationMethod::REML) {
+        std::cerr << "REML logic" << std::endl;
+        std::unordered_set<std::string> latent_vars;
+        for (const auto& var : model.variables) {
+            if (var.kind == VariableKind::Latent) {
+                latent_vars.insert(var.name);
+            }
+        }
+
         for (const auto& edge : model.edges) {
             if (edge.kind == EdgeKind::Regression && edge.target == obs_var_name) {
-                fixed_effect_vars.push_back(edge.source);
+                if (latent_vars.find(edge.source) == latent_vars.end()) {
+                    fixed_effect_vars.push_back(edge.source);
+                }
             }
         }
         std::sort(fixed_effect_vars.begin(), fixed_effect_vars.end());
     }
 
-    if (obs_family_name == "gaussian" && all_outcome_vars.size() <= 1) {
+    if (obs_family_name == "gaussian" && all_outcome_vars.size() <= 1 && !force_laplace) {
         // Check for block-diagonal optimization
         bool can_optimize_blocks = false;
         std::string common_grouping_var;
@@ -2129,12 +2937,27 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 }
                 
                 for (const auto& info : random_effect_infos) {
+                    std::cerr << "Processing info for REML/Gradient: " << info.id << std::endl;
                     auto Z_i_full = build_design_matrix(info, rep_indices, data, linear_predictors);
                     std::size_t q = info.cov_spec->dimension;
+                    std::cerr << "Z_i_full size: " << Z_i_full.size() << ", n_i: " << n_i << ", q: " << q << std::endl;
                     Eigen::Map<const RowMajorMatrix> Z_map(Z_i_full.data(), n_i, q);
-                    Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
                     Eigen::Map<RowMajorMatrix> V_map(V_i.data(), n_i, n_i);
-                    V_map += Z_map * G_map * Z_map.transpose();
+                    
+                    if (info.is_sparse) {
+                        std::cerr << "Sparse path" << std::endl;
+                        if (!info.G_sparse) {
+                             std::cerr << "G_sparse is null!" << std::endl;
+                             throw std::runtime_error("G_sparse is null");
+                        }
+                        Eigen::MatrixXd Z_dense = Z_map;
+                        Eigen::MatrixXd temp = Z_dense * *info.G_sparse;
+                        V_map += temp * Z_dense.transpose();
+                    } else {
+                        std::cerr << "Dense path" << std::endl;
+                        Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
+                        V_map += Z_map * G_map * Z_map.transpose();
+                    }
                 }
                 
                 std::vector<double> L_i(n_i * n_i);
@@ -2152,7 +2975,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 
                 for (size_t k=0; k<random_effect_infos.size(); ++k) {
                     const auto& info = random_effect_infos[k];
-                    if (info.G_gradients.empty() && info.design_vars.empty()) continue;
+                    if (info.G_gradients.empty() && info.G_gradients_sparse.empty() && info.design_vars.empty()) continue;
                     
                     auto Z_i_full = build_design_matrix(info, rep_indices, data, linear_predictors);
                     std::size_t q = info.cov_spec->dimension;
@@ -2225,19 +3048,54 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                         const auto& info = random_effect_infos[k];
                         std::size_t q = info.cov_spec->dimension;
                         
+                        if (caches[k].Vinv_Z.empty()) {
+                            continue;
+                        }
+
                         Eigen::Map<const RowMajorMatrix> Vinv_Z_map(caches[k].Vinv_Z.data(), n_i, q);
                         Eigen::VectorXd b = Vinv_Z_map.transpose() * r_vec;
                         
                         // dL/dG
-                        for (std::size_t idx = 0; idx < info.G_gradients.size(); ++idx) {
-                            std::string param_name = info.covariance_id + "_" + std::to_string(idx);
-                            const auto& dG = info.G_gradients[idx];
-                            Eigen::Map<const RowMajorMatrix> dG_map(dG.data(), q, q);
+                        if (info.is_sparse) {
+                            if (caches[k].A.empty()) {
+                                // If A is empty, we shouldn't be here if we have gradients
+                                if (!info.G_gradients_sparse.empty()) {
+                                     std::cerr << "Error: caches[" << k << "].A is empty but G_gradients_sparse is not!" << std::endl;
+                                }
+                                continue;
+                            }
+                            std::cerr << "Computing sparse gradients for " << info.id << std::endl;
                             Eigen::Map<const RowMajorMatrix> A_map(caches[k].A.data(), q, q);
-                            
-                            double term1 = b.transpose() * dG_map * b;
-                            double term2 = (A_map * dG_map).trace();
-                            gradients[param_name] += 0.5 * (term1 - term2);
+                            for (std::size_t idx = 0; idx < info.G_gradients_sparse.size(); ++idx) {
+                                std::string param_name = info.covariance_id + "_" + std::to_string(idx);
+                                const auto& dG = info.G_gradients_sparse[idx];
+                                
+                                double term1 = b.transpose() * dG * b;
+                                double term2 = 0.0;
+                                
+                                // trace(A * dG) = sum_{i,j} A_ij * dG_ji
+                                for (int k_outer=0; k_outer<dG.outerSize(); ++k_outer) {
+                                    for (Eigen::SparseMatrix<double>::InnerIterator it(dG, k_outer); it; ++it) {
+                                        if (it.col() >= q || it.row() >= q) {
+                                            std::cerr << "Index out of bounds in sparse trace: " << it.row() << "," << it.col() << " q=" << q << std::endl;
+                                            continue;
+                                        }
+                                        term2 += A_map(it.col(), it.row()) * it.value();
+                                    }
+                                }
+                                gradients[param_name] += 0.5 * (term1 - term2);
+                            }
+                        } else {
+                            for (std::size_t idx = 0; idx < info.G_gradients.size(); ++idx) {
+                                std::string param_name = info.covariance_id + "_" + std::to_string(idx);
+                                const auto& dG = info.G_gradients[idx];
+                                Eigen::Map<const RowMajorMatrix> dG_map(dG.data(), q, q);
+                                Eigen::Map<const RowMajorMatrix> A_map(caches[k].A.data(), q, q);
+                                
+                                double term1 = b.transpose() * dG_map * b;
+                                double term2 = (A_map * dG_map).trace();
+                                gradients[param_name] += 0.5 * (term1 - term2);
+                            }
                         }
                         
                         // dL/dZ
@@ -2251,8 +3109,13 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                         
                         if (need_Z_grad) {
                             Eigen::MatrixXd M = alpha * b.transpose() - Vinv_Z_map;
-                            Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
-                            Eigen::MatrixXd dLdZ = M * G_map;
+                            Eigen::MatrixXd dLdZ;
+                            if (info.is_sparse) {
+                                dLdZ = M * *info.G_sparse;
+                            } else {
+                                Eigen::Map<const RowMajorMatrix> G_map(info.G_matrix.data(), q, q);
+                                dLdZ = M * G_map;
+                            }
                             
                             for (std::size_t c = 0; c < q; ++c) {
                                 const std::string& var_name = info.design_vars[c];
@@ -2545,7 +3408,9 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         return {total_loglik, gradients};
     }
 
+    std::cerr << "Calling get_or_build_laplace_system" << std::endl;
     LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, laplace_cache_);
+    std::cerr << "Returned from get_or_build_laplace_system" << std::endl;
     if (system.total_dim == 0) {
         throw std::runtime_error("Laplace system constructed without latent dimensions");
     }
@@ -2589,27 +3454,28 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     
     if (!solve_laplace_system(system,
                               outcomes,
-                              laplace_result)) {
+                              laplace_result,
+                              sparse_accumulator)) {
         return { -std::numeric_limits<double>::infinity(), gradients };
     }
 
     double log_prior = compute_prior_loglik(system, laplace_result, log_2pi);
+
     double log_lik_data = 0.0;
     for (const auto& eval : laplace_result.evaluations) {
         log_lik_data += eval.log_likelihood;
     }
-    double log_det_neg_hess = log_det_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
+    double log_det_neg_hess = laplace_result.log_det_neg_hess;
     total_loglik = log_prior + log_lik_data + 0.5 * system.total_dim * log_2pi - 0.5 * log_det_neg_hess;
 
-    std::vector<double> neg_hess_inv = invert_from_cholesky(system.total_dim, laplace_result.chol_neg_hessian);
     std::vector<double> forcing(system.total_dim, 0.0);
 
     std::size_t eval_offset = 0;
     for(size_t k=0; k<outcomes.size(); ++k) {
         const auto& outcome = outcomes[k];
         std::size_t n_outcome = outcome.obs.size();
-        
-        auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
+        std::string_view sv = outcome.name;
+        auto quad_terms = compute_observation_quad_terms(system, laplace_result, sv);
 
         if (!dispersion_param_mappings.empty()) {
             auto map_it = dispersion_param_mappings.find(outcome.name);
@@ -2642,7 +3508,14 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 weights[i] = laplace_result.evaluations[eval_offset + i].second_derivative * src_vec[i];
             }
             accumulate_weighted_forcing(system, weights, forcing);
-            auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            std::vector<double> du(system.total_dim);
+            if (laplace_result.use_sparse) {
+                Eigen::Map<Eigen::VectorXd> f_vec(forcing.data(), system.total_dim);
+                Eigen::VectorXd du_vec = laplace_result.sparse_solver->solve(f_vec);
+                Eigen::Map<Eigen::VectorXd>(du.data(), system.total_dim) = du_vec;
+            } else {
+                du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            }
             auto z_dot_du = project_observations(system, du, outcome.name);
 
             double accum = 0.0;
@@ -2671,7 +3544,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         std::size_t q = info.cov_spec->dimension;
         for (std::size_t idx = 0; idx < info.G_gradients.size(); ++idx) {
             CovarianceDerivativeCache cache;
-            cache.param_name = info.covariance_id + "_" + std::to_string(idx);
+            cache.param_name = info.covariance_id + "_" + std::to_string(idx); // This might be wrong if param_ids are stored elsewhere
             auto temp = multiply_matrices(info.G_inverse, info.G_gradients[idx], q);
             cache.Ginv_dG_Ginv = multiply_matrices(temp, info.G_inverse, q);
             cache.trace_Ginv_dG = trace_product(info.G_inverse, info.G_gradients[idx], q);
@@ -2679,26 +3552,39 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
         }
         covariance_caches.emplace(info.covariance_id, std::move(caches));
     }
+    std::cerr << "Finished covariance cache loop" << std::endl;
 
     const std::size_t Q = system.total_dim;
+    std::cerr << "Starting system blocks loop. Q=" << Q << std::endl;
     for (const auto& block : system.blocks) {
+        std::cerr << "Processing block for: " << block.info->covariance_id << std::endl;
         auto cache_it = covariance_caches.find(block.info->covariance_id);
         if (cache_it == covariance_caches.end()) {
+            std::cerr << "Cache not found" << std::endl;
             continue;
         }
 
         std::vector<double> u_block(block.q);
+        std::cerr << "Extracting u_block. offset=" << block.offset << ", q=" << block.q << std::endl;
         for (std::size_t j = 0; j < block.q; ++j) {
             u_block[j] = laplace_result.u[block.offset + j];
         }
 
         for (const auto& cache : cache_it->second) {
+            std::cerr << "Processing cache entry: " << cache.param_name << std::endl;
             auto block_forcing = multiply_matrix_vector(cache.Ginv_dG_Ginv, u_block, block.q);
             std::fill(forcing.begin(), forcing.end(), 0.0);
             for (std::size_t j = 0; j < block.q; ++j) {
                 forcing[block.offset + j] = block_forcing[j];
             }
-            auto du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            std::vector<double> du(system.total_dim);
+            if (laplace_result.use_sparse) {
+                Eigen::Map<Eigen::VectorXd> f_vec(forcing.data(), system.total_dim);
+                Eigen::VectorXd du_vec = laplace_result.sparse_solver->solve(f_vec);
+                Eigen::Map<Eigen::VectorXd>(du.data(), system.total_dim) = du_vec;
+            } else {
+                du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
+            }
             
             double logdet_adjust_total = 0.0;
             std::size_t eval_offset_cov = 0;
@@ -2706,21 +3592,23 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 const auto& outcome = outcomes[k];
                 std::size_t n_outcome = outcome.obs.size();
                 auto z_dot_du = project_observations(system, du, outcome.name);
-                auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
+                auto quad_terms = compute_observation_quad_terms(system, laplace_result, outcome.name);
                 
                 for (std::size_t obs_idx = 0; obs_idx < n_outcome; ++obs_idx) {
-                    logdet_adjust_total += 0.5 * laplace_result.evaluations[eval_offset_cov + obs_idx].third_derivative * z_dot_du[obs_idx] * quad_terms[obs_idx];
+                    const auto& eval = laplace_result.evaluations[eval_offset_cov + obs_idx];
+                    logdet_adjust_total += 0.5 * eval.third_derivative * z_dot_du[obs_idx] * quad_terms[obs_idx];
                 }
                 eval_offset_cov += n_outcome;
             }
 
             double prior_term = 0.5 * quadratic_form(u_block, cache.Ginv_dG_Ginv, block.q) - 0.5 * cache.trace_Ginv_dG;
+
             double trace_term = 0.0;
+            std::vector<double> inv_block = get_inverse_block(laplace_result, block, Q);
+
             for (std::size_t r = 0; r < block.q; ++r) {
                 for (std::size_t c = 0; c < block.q; ++c) {
-                    const std::size_t row_idx = block.offset + r;
-                    const std::size_t col_idx = block.offset + c;
-                    trace_term += neg_hess_inv[row_idx * Q + col_idx] * cache.Ginv_dG_Ginv[c * block.q + r];
+                    trace_term += inv_block[r * block.q + c] * cache.Ginv_dG_Ginv[c * block.q + r];
                 }
             }
             double logdet_term = 0.5 * trace_term + logdet_adjust_total;
@@ -2740,7 +3628,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 const auto& param_ids = map_it->second;
                 
                 // We need quad_terms
-                auto quad_terms = compute_observation_quad_terms(system, neg_hess_inv, outcome.name);
+                auto quad_terms = compute_observation_quad_terms(system, laplace_result, outcome.name);
                 
                 for (std::size_t i = 0; i < n_outcome; ++i) {
                     const auto& eval = laplace_result.evaluations[eval_offset_extra + i];
@@ -2790,6 +3678,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                     if (!has_mapped) continue;
                     
                     const double* z_row = &block.design_matrix[entry.row_index * block.q];
+                    std::vector<double> inv_block = get_inverse_block(laplace_result, block, Q);
                     
                     for (std::size_t c = 0; c < block.q; ++c) {
                         const std::string& var_name = info.design_vars[c];
@@ -2804,7 +3693,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                                     
                                     double term2_inner = 0.0;
                                     for (std::size_t r = 0; r < block.q; ++r) {
-                                        term2_inner += neg_hess_inv[(block.offset + c) * Q + (block.offset + r)] * z_row[r];
+                                        term2_inner += inv_block[c * block.q + r] * z_row[r];
                                     }
                                     double term2 = eval.second_derivative * term2_inner;
                                     
@@ -2893,11 +3782,15 @@ std::unordered_map<std::string, std::vector<double>> LikelihoodDriver::compute_r
     const auto& disp_data = disp_it->second;
 
     // 2. Build RandomEffectInfos
-    auto random_effect_infos = build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, false);
+    std::cerr << "About to call build_random_effect_infos" << std::endl;
+    std::vector<RandomEffectInfo> random_effect_infos;
+    build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, false, random_effect_infos);
+    std::cerr << "Returned from build_random_effect_infos in caller" << std::endl;
     if (random_effect_infos.empty()) return random_effects;
 
     // 3. Build/Get Laplace System
     std::shared_ptr<void> cache_handle;
+    std::cerr << "Calling get_or_build_laplace_system from compute_random_effects" << std::endl;
     LaplaceSystem& system = get_or_build_laplace_system(random_effect_infos, data, linear_predictors, n, cache_handle);
 
     if (system.total_dim == 0) return random_effects;
@@ -2965,9 +3858,9 @@ Eigen::MatrixXd compute_hessian(const ObjectiveFunction& objective, const std::v
         for (size_t i = 0; i < n; ++i) {
             double val = (grad_plus[i] - grad_minus[i]) / (2.0 * epsilon);
             if (std::isnan(val)) {
-                std::cout << "NaN in Hessian at (" << i << "," << j << ")" << std::endl;
-                std::cout << "grad_plus[" << i << "] = " << grad_plus[i] << std::endl;
-                std::cout << "grad_minus[" << i << "] = " << grad_minus[i] << std::endl;
+                // std::cout << "NaN in Hessian at (" << i << "," << j << ")" << std::endl;
+                // std::cout << "grad_plus[" << i << "] = " << grad_plus[i] << std::endl;
+                // std::cout << "grad_minus[" << i << "] = " << grad_minus[i] << std::endl;
             }
             hessian(i, j) = val;
         }
@@ -2989,11 +3882,11 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
                                          EstimationMethod method,
                                          const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings) const {
     
-    std::cerr << "LikelihoodDriver::fit start" << std::endl;
-    ModelObjective objective(*this, model, data, fixed_covariance_data, status, method, extra_param_mappings);
+    std::cerr << "Entering LikelihoodDriver::fit" << std::endl;
+    ModelObjective objective(*this, model, data, fixed_covariance_data, status, method, extra_param_mappings, options.force_laplace);
     std::cerr << "ModelObjective created" << std::endl;
     auto initial_params = objective.initial_parameters();
-    std::cerr << "Initial params count: " << initial_params.size() << std::endl;
+    std::cerr << "Initial parameters size: " << initial_params.size() << std::endl;
     
     std::unique_ptr<Optimizer> optimizer;
     if (optimizer_name == "lbfgs") {
@@ -3001,8 +3894,10 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
     } else {
         optimizer = make_gradient_descent_optimizer();
     }
+    std::cerr << "Optimizer created" << std::endl;
     
     auto result = optimizer->optimize(objective, initial_params, options);
+    std::cerr << "Optimization finished" << std::endl;
     
     FitResult fit_result;
     fit_result.optimization_result = result;
@@ -3202,6 +4097,184 @@ FitResult LikelihoodDriver::fit(const ModelIR& model,
          fit_result.vcov.assign(n*n, std::numeric_limits<double>::quiet_NaN());
          // Keep AIC/BIC as computed
     }
+
+    // Transform parameters to constrained space for reporting
+    fit_result.optimization_result.parameters = objective.to_constrained(result.parameters);
+    fit_result.parameter_names = objective.parameter_names();
+
+    return fit_result;
+}
+
+FitResult LikelihoodDriver::fit_multi_group(const std::vector<ModelIR>& models,
+                                            const std::vector<std::unordered_map<std::string, std::vector<double>>>& data,
+                                            const OptimizationOptions& options,
+                                            const std::string& optimizer_name,
+                                            const std::vector<std::unordered_map<std::string, std::vector<std::vector<double>>>>& fixed_covariance_data,
+                                            const std::vector<std::unordered_map<std::string, std::vector<double>>>& status,
+                                            EstimationMethod method,
+                                            const std::vector<std::unordered_map<std::string, std::vector<std::string>>>& extra_param_mappings) const {
+    
+    if (models.size() != data.size()) {
+        throw std::invalid_argument("Number of models must match number of data sets");
+    }
+    
+    std::vector<std::unique_ptr<ModelObjective>> objectives;
+    objectives.reserve(models.size());
+    
+    size_t total_obs = 0;
+    
+    // Default empty maps to ensure references remain valid
+    std::unordered_map<std::string, std::vector<std::vector<double>>> empty_fixed_cov;
+    std::unordered_map<std::string, std::vector<double>> empty_status;
+    std::unordered_map<std::string, std::vector<std::string>> empty_extra;
+    
+    for (size_t i = 0; i < models.size(); ++i) {
+        const auto& fixed_cov = (i < fixed_covariance_data.size()) ? fixed_covariance_data[i] : empty_fixed_cov;
+        const auto& stat = (i < status.size()) ? status[i] : empty_status;
+        const auto& extra = (i < extra_param_mappings.size()) ? extra_param_mappings[i] : empty_extra;
+        
+        objectives.push_back(std::make_unique<ModelObjective>(*this, models[i], data[i], fixed_cov, stat, method, extra, options.force_laplace));
+        
+        // Count observations (approximate, using first variable)
+        if (!data[i].empty()) {
+            total_obs += data[i].begin()->second.size();
+        }
+    }
+    
+    MultiGroupModelObjective multi_obj(std::move(objectives));
+    
+    std::unique_ptr<Optimizer> optimizer;
+    if (optimizer_name == "lbfgs") {
+        optimizer = std::make_unique<LBFGSOptimizer>();
+    } else if (optimizer_name == "gd") {
+        optimizer = std::make_unique<GradientDescentOptimizer>();
+    } else {
+        throw std::invalid_argument("Unknown optimizer: " + optimizer_name);
+    }
+    
+    auto initial_params = multi_obj.initial_parameters();
+    auto result = optimizer->optimize(multi_obj, initial_params, options);
+    
+    FitResult fit_result;
+    fit_result.optimization_result = result;
+    fit_result.parameter_names = multi_obj.parameter_names();
+    
+    // Compute AIC/BIC
+    size_t k = result.parameters.size();
+    double loglik = -result.objective_value;
+    fit_result.aic = 2.0 * k - 2.0 * loglik;
+    fit_result.bic = k * std::log(static_cast<double>(total_obs)) - 2.0 * loglik;
+    
+    // Compute Hessian and SEs
+    if (result.converged) {
+        try {
+            size_t n_params = result.parameters.size();
+            std::vector<double> hessian(n_params * n_params);
+            
+            // Numerical Hessian
+            double epsilon = 1e-4;
+            std::vector<double> x = result.parameters;
+            std::vector<double> grad0 = multi_obj.gradient(x);
+            
+            for (size_t i = 0; i < n_params; ++i) {
+                double original = x[i];
+                x[i] += epsilon;
+                std::vector<double> grad_plus = multi_obj.gradient(x);
+                x[i] = original;
+                
+                for (size_t j = 0; j < n_params; ++j) {
+                    hessian[i * n_params + j] = (grad_plus[j] - grad0[j]) / epsilon;
+                }
+            }
+            
+            // Symmetrize
+            for (size_t i = 0; i < n_params; ++i) {
+                for (size_t j = i + 1; j < n_params; ++j) {
+                    double avg = 0.5 * (hessian[i * n_params + j] + hessian[j * n_params + i]);
+                    hessian[i * n_params + j] = avg;
+                    hessian[j * n_params + i] = avg;
+                }
+            }
+            
+            // Invert
+            Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> H(hessian.data(), n_params, n_params);
+            Eigen::MatrixXd H_inv = H.inverse();
+            
+            fit_result.vcov.resize(n_params * n_params);
+            Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(fit_result.vcov.data(), n_params, n_params) = H_inv;
+            
+            fit_result.standard_errors.resize(n_params);
+            for (size_t i = 0; i < n_params; ++i) {
+                double var = fit_result.vcov[i * n_params + i];
+                if (var > 0) {
+                    fit_result.standard_errors[i] = std::sqrt(var);
+                } else {
+                    fit_result.standard_errors[i] = std::numeric_limits<double>::quiet_NaN();
+                }
+            }
+            
+            // Aggregate covariance matrices and random effects
+            // We need to split parameters back to groups
+            auto group_params = multi_obj.split_parameters(result.parameters);
+            const auto& objs = multi_obj.objectives();
+            
+            for (size_t i = 0; i < objs.size(); ++i) {
+                // We need to convert unconstrained to constrained for each group
+                // But ModelObjective::get_covariance_matrices takes constrained parameters.
+                // And ModelObjective::to_constrained takes unconstrained.
+                
+                auto constrained = objs[i]->to_constrained(group_params[i]);
+                
+                auto covs = objs[i]->get_covariance_matrices(constrained);
+                for (const auto& [key, val] : covs) {
+                    // If key exists, we overwrite? Or check consistency?
+                    // For now overwrite.
+                    fit_result.covariance_matrices[key] = val;
+                }
+                
+                // Random effects
+                // We need to call compute_random_effects logic.
+                // But compute_random_effects is on LikelihoodDriver and takes ModelIR etc.
+                // We can use the helper on LikelihoodDriver if we expose it, or duplicate logic.
+                // Actually, ModelObjective doesn't expose random effects computation directly.
+                // But LikelihoodDriver::compute_random_effects does.
+                // We can call it.
+                
+                // We need linear predictors and dispersions first.
+                std::unordered_map<std::string, std::vector<double>> lin_preds;
+                std::unordered_map<std::string, std::vector<double>> disps;
+                std::unordered_map<std::string, std::vector<double>> cov_params;
+                
+                objs[i]->build_prediction_workspaces(constrained, lin_preds, disps, cov_params);
+                auto extra_p = objs[i]->build_extra_params(constrained);
+                
+                const auto& fixed_cov = (i < fixed_covariance_data.size()) ? fixed_covariance_data[i] : empty_fixed_cov;
+                const auto& stat = (i < status.size()) ? status[i] : empty_status;
+
+                auto res = compute_random_effects(models[i], data[i], lin_preds, disps, cov_params, 
+                                                  stat,
+                                                  extra_p,
+                                                  fixed_cov);
+                
+                for (const auto& [key, val] : res) {
+                    fit_result.random_effects[key] = val;
+                }
+            }
+            
+        } catch (...) {
+             size_t n = result.parameters.size();
+             fit_result.standard_errors.assign(n, std::numeric_limits<double>::quiet_NaN());
+             fit_result.vcov.assign(n*n, std::numeric_limits<double>::quiet_NaN());
+        }
+    } else {
+         size_t n = result.parameters.size();
+         fit_result.standard_errors.assign(n, std::numeric_limits<double>::quiet_NaN());
+         fit_result.vcov.assign(n*n, std::numeric_limits<double>::quiet_NaN());
+    }
+    
+    // Transform parameters to constrained space for reporting
+    fit_result.optimization_result.parameters = multi_obj.to_constrained(result.parameters);
+    fit_result.parameter_names = multi_obj.parameter_names();
 
     return fit_result;
 }

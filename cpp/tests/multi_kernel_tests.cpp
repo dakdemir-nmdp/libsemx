@@ -60,8 +60,8 @@ TEST_CASE("LikelihoodDriver handles multi_kernel covariance", "[likelihood_drive
 
     // Define random effect
     // Dummy variables for random slopes to match dimension 2
-    builder.add_variable("id1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("id2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("id1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("id2", libsemx::VariableKind::Exogenous);
     
     // Outcome variable LAST
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");

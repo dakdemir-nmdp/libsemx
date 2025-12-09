@@ -1,4 +1,5 @@
 #include "libsemx/covariance_structure.hpp"
+#include "libsemx/fixed_covariance.hpp"
 #include "libsemx/scaled_fixed_covariance.hpp"
 #include "libsemx/multi_kernel_covariance.hpp"
 #include "libsemx/genomic_kernel.hpp"
@@ -169,6 +170,52 @@ std::vector<double> CovarianceStructure::materialize(const std::vector<double>& 
     return matrix;
 }
 
+Eigen::SparseMatrix<double> CovarianceStructure::materialize_sparse(const std::vector<double>& parameters) const {
+    // Default implementation: materialize dense and convert
+    // This is inefficient but correct for structures that haven't optimized this yet
+    std::vector<double> dense = materialize(parameters);
+    
+    Eigen::SparseMatrix<double> sparse(dimension_, dimension_);
+    std::vector<Eigen::Triplet<double>> triplets;
+    // Heuristic: reserve 10% density if we have to guess, or just let vector grow
+    
+    for (std::size_t i = 0; i < dimension_; ++i) {
+        for (std::size_t j = 0; j < dimension_; ++j) {
+            double val = dense[i * dimension_ + j];
+            if (val != 0.0) {
+                triplets.emplace_back(i, j, val);
+            }
+        }
+    }
+    sparse.setFromTriplets(triplets.begin(), triplets.end());
+    return sparse;
+}
+
+std::vector<Eigen::SparseMatrix<double>> CovarianceStructure::parameter_gradients_sparse(const std::vector<double>& parameters) const {
+    // Default implementation: compute dense gradients and convert
+    auto dense_grads = parameter_gradients(parameters);
+    std::vector<Eigen::SparseMatrix<double>> sparse_grads;
+    sparse_grads.reserve(dense_grads.size());
+    
+    for (const auto& dense : dense_grads) {
+        Eigen::SparseMatrix<double> sparse(dimension_, dimension_);
+        std::vector<Eigen::Triplet<double>> triplets;
+        // Heuristic: assume gradients are somewhat sparse
+        
+        for (std::size_t i = 0; i < dimension_; ++i) {
+            for (std::size_t j = 0; j < dimension_; ++j) {
+                double val = dense[i * dimension_ + j];
+                if (val != 0.0) {
+                    triplets.emplace_back(i, j, val);
+                }
+            }
+        }
+        sparse.setFromTriplets(triplets.begin(), triplets.end());
+        sparse_grads.push_back(std::move(sparse));
+    }
+    return sparse_grads;
+}
+
 void CovarianceStructure::validate_parameters(const std::vector<double>& parameters) const {
     if (parameters.size() != parameter_count_) {
         throw std::invalid_argument("parameter count mismatch for covariance structure");
@@ -281,6 +328,34 @@ std::vector<std::vector<double>> ExplicitCovariance::parameter_gradients(const s
 
 DiagonalCovariance::DiagonalCovariance(std::size_t dimension)
     : CovarianceStructure(dimension, dimension) {}
+
+Eigen::SparseMatrix<double> DiagonalCovariance::materialize_sparse(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    const std::size_t dim = dimension();
+    Eigen::SparseMatrix<double> sparse(dim, dim);
+    // Diagonal matrix has exactly 'dim' non-zeros
+    sparse.reserve(Eigen::VectorXi::Constant(dim, 1));
+    
+    for (std::size_t i = 0; i < dim; ++i) {
+        sparse.insert(i, i) = parameters[i];
+    }
+    sparse.makeCompressed();
+    return sparse;
+}
+
+std::vector<Eigen::SparseMatrix<double>> DiagonalCovariance::parameter_gradients_sparse(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    std::vector<Eigen::SparseMatrix<double>> grads;
+    grads.reserve(dimension());
+    
+    for (std::size_t i = 0; i < dimension(); ++i) {
+        Eigen::SparseMatrix<double> sparse(dimension(), dimension());
+        sparse.insert(i, i) = 1.0;
+        sparse.makeCompressed();
+        grads.push_back(std::move(sparse));
+    }
+    return grads;
+}
 
 void DiagonalCovariance::fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const {
     const std::size_t dim = dimension();
@@ -568,6 +643,12 @@ std::unique_ptr<CovarianceStructure> create_covariance_structure(
         return std::make_unique<ExplicitCovariance>(spec.dimension);
     } else if (normalized == "diagonal") {
         return std::make_unique<DiagonalCovariance>(spec.dimension);
+    } else if (normalized == "identity") {
+        std::vector<double> identity(spec.dimension * spec.dimension, 0.0);
+        for (std::size_t i = 0; i < spec.dimension; ++i) {
+            identity[i * spec.dimension + i] = 1.0;
+        }
+        return std::make_unique<FixedCovariance>(std::move(identity), spec.dimension);
     } else if (normalized == "scaled_fixed") {
         auto fixed_it = fixed_covariance_data.find(spec.id);
         if (fixed_it == fixed_covariance_data.end()) {

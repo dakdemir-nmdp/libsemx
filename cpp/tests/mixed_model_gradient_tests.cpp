@@ -18,11 +18,13 @@ TEST_CASE("LikelihoodDriver evaluates analytic gradients for Gaussian mixed mode
     builder.add_variable("cluster", VariableKind::Grouping);
     
     // y = beta * x + u + e
+    builder.add_variable("u", VariableKind::Latent);
     builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
     
     // Random intercept u ~ N(0, sigma_u^2)
     builder.add_covariance("G", "diagonal", 1);
     builder.add_random_effect("u", {"cluster"}, "G");
+    builder.add_edge(EdgeKind::Regression, "u", "y", "1");
     
     auto model = builder.build();
     
@@ -112,6 +114,8 @@ TEST_CASE("LikelihoodDriver analytic gradients handle multiple random effects", 
     builder.add_variable("y", VariableKind::Observed, "gaussian");
     builder.add_variable("x", VariableKind::Latent);
     builder.add_variable("cluster", VariableKind::Grouping);
+    builder.add_variable("u_intercept", VariableKind::Latent);
+    builder.add_variable("u_slope", VariableKind::Latent);
 
     builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
 
@@ -120,6 +124,8 @@ TEST_CASE("LikelihoodDriver analytic gradients handle multiple random effects", 
 
     builder.add_random_effect("u_intercept", {"cluster"}, "G_intercept");
     builder.add_random_effect("u_slope", {"cluster", "x"}, "G_slope");
+    builder.add_edge(EdgeKind::Regression, "u_intercept", "y", "1");
+    builder.add_edge(EdgeKind::Regression, "u_slope", "y", "1");
 
     auto model = builder.build();
 
@@ -196,6 +202,8 @@ TEST_CASE("LikelihoodDriver analytic gradients handle crossed grouping factors",
     builder.add_variable("x", VariableKind::Latent);
     builder.add_variable("cluster_a", VariableKind::Grouping);
     builder.add_variable("cluster_b", VariableKind::Grouping);
+    builder.add_variable("u_a", VariableKind::Latent);
+    builder.add_variable("u_b", VariableKind::Latent);
 
     builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
 
@@ -204,6 +212,8 @@ TEST_CASE("LikelihoodDriver analytic gradients handle crossed grouping factors",
 
     builder.add_random_effect("u_a", {"cluster_a"}, "G_a");
     builder.add_random_effect("u_b", {"cluster_b"}, "G_b");
+    builder.add_edge(EdgeKind::Regression, "u_a", "y", "1");
+    builder.add_edge(EdgeKind::Regression, "u_b", "y", "1");
 
     auto model = builder.build();
 
@@ -278,11 +288,13 @@ TEST_CASE("LikelihoodDriver Laplace gradients match finite differences", "[gradi
     builder.add_variable("y", VariableKind::Observed, "binomial");
     builder.add_variable("x", VariableKind::Latent);
     builder.add_variable("cluster", VariableKind::Grouping);
+    builder.add_variable("u", VariableKind::Latent);
 
     builder.add_edge(EdgeKind::Regression, "x", "y", "beta");
 
     builder.add_covariance("G", "diagonal", 1);
     builder.add_random_effect("u", {"cluster"}, "G");
+    builder.add_edge(EdgeKind::Regression, "u", "y", "1");
 
     auto model = builder.build();
 

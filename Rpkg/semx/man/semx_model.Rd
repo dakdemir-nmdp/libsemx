@@ -5,12 +5,13 @@
 \title{Build a ModelIR from high-level equations}
 \usage{
 semx_model(
-  equations,
-  families,
+  equations = NULL,
+  families = NULL,
   kinds = NULL,
   covariances = NULL,
   genomic = NULL,
-  random_effects = NULL
+  random_effects = NULL,
+  data = NULL
 )
 }
 \arguments{
@@ -28,6 +29,9 @@ family identifiers such as ``gaussian`` or ``binomial``.}
 a numeric matrix `markers` and optional `structure`, `center`, and `normalize` flags.}
 
 \item{random_effects}{Optional list of random effect definitions (name, variables, covariance).}
+
+\item{data}{Optional list or data.frame containing data. If provided, it can be used to resolve
+genomic matrices referenced in `genomic` specs or equations.}
 }
 \value{
 A list with class \code{semx_model} that contains the compiled

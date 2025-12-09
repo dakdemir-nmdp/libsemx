@@ -3,7 +3,7 @@
 import pytest
 
 try:
-    import _libsemx as semx_cpp
+    import semx as semx_cpp
 except ImportError:
     pytest.skip("C++ extension not available", allow_module_level=True)
 

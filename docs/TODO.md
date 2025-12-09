@@ -1,6 +1,28 @@
 # libsemx TODO
 
 ## Active
+- [ ] Sparse Linear Algebra
+    - [x] Replace dense Eigen matrices with Sparse matrices in `CovarianceStructure` interface.
+        - [x] Added `is_sparse()` and `materialize_sparse()` to `CovarianceStructure`.
+        - [x] Implemented optimized `materialize_sparse()` for `DiagonalCovariance`.
+        - [x] Added tests for sparse materialization and fallback.
+    - [x] Update `LikelihoodDriver` to utilize sparse matrices for large-scale operations.
+        - [x] Implemented `solve_laplace_system_sparse` using `Eigen::SimplicialLDLT`.
+        - [x] Implemented `compute_system_grad_hess_sparse` for efficient gradient/Hessian assembly.
+        - [x] Added `sparse_likelihood_tests.cpp` to validate sparse solver correctness.
+    - [x] Implement sparse `KroneckerCovariance`.
+        - [x] Implemented `is_sparse()` and `materialize_sparse()` using sparse Kronecker product.
+        - [x] Implemented `parameter_gradients_sparse()` for efficient gradient computation.
+        - [x] Added tests for sparse Kronecker materialization and gradients.
+- [x] Implement Genomic Selection (GBLUP) in R package.
+    - [x] Created `semx_gs` function in R package.
+    - [x] Fixed REML bug where latent random effects were incorrectly treated as fixed effects.
+    - [x] Fixed Rcpp bindings for `grm_vanraden` and `grm_kronecker` to return matrices instead of vectors.
+    - [x] Fixed `semx_variance_components` to correctly report GBLUP variances (handle scalar design with matrix covariance).
+    - [x] Verified with `check_gs.R`.
+- [x] Fix "Zero-BLUP" regression in R package.
+    - [x] Fixed graph construction where random effect edges were not being registered in the `ModelGraph`, causing them to be ignored during optimization and BLUP calculation.
+    - [x] Verified fix with `check_ranef.R` using both manual model construction and string parser.
 - [x] Fix Documentation Examples
     - [x] Fix `docs/examples/mdp_analysis.Rmd` rendering issue (convert grouping variable to numeric).
 - [x] Validation & Benchmarking against established software.
@@ -59,6 +81,28 @@
         - [x] Add simulation harness that asserts recovery of known parameters (do not rely solely on comparator software correctness); report tolerance bands and any systematic drifts.
             - [x] Created `validation/simulation_harness.R` covering Gaussian, Mixed, Binomial/Poisson GLMM, CFA, and Survival models.
             - [x] Verified parameter recovery within tolerance (GLMM variances required relaxed tolerance due to Laplace approximation bias).
+
+## Phase 3: Advanced Features & Optimization
+- [x] **Multi-group Analysis** (Blueprint §2.2)
+    - [x] Extend `ModelGraph`/`ModelIR` to support multiple groups (multiple data blocks, parameter constraints across groups).
+    - [x] Update `LikelihoodDriver` to sum log-likelihoods across groups.
+    - [x] Update front-ends (R/Python) to accept `group` argument and `group.equal` constraints.
+- [x] **Sparse Linear Algebra** (Blueprint §2.6, §12)
+    - [x] Replace dense Eigen matrices with Sparse matrices in `CovarianceStructure` and `LikelihoodDriver` where appropriate (e.g. large GRMs, sparse design matrices).
+    - [x] Implement sparse Cholesky solver for Laplace approximation.
+        - [x] Implemented `Eigen::SimplicialLDLT` solver for sparse Hessian inversion.
+        - [x] Optimized sparse Hessian assembly using `SparseHessianAccumulator` to cache sparsity patterns (3x speedup in assembly).
+- [x] **Advanced Visualization** (Blueprint §8.1, §9.1)
+    - [x] Implement Path Diagrams (using `DiagrammeR` in R, `graphviz` in Python).
+    - [x] Implement Survival Curves / CIF plots.
+    - [x] Implement GxE Reaction Norm plots.
+- [x] **High-level Genomic Selection API** (Blueprint §4.6, §4.7)
+    - [x] Implement `semx_gs` in R (matching blueprint syntax).
+    - [x] Enhance `semx.gxe_model` in Python to support Kronecker structures ($K_G \otimes I_E$).
+    - [x] Add `semx_gxe` in R (wrapper for GxE models).
+        - [x] Implemented `semx_gxe` with support for diagonal and Kronecker covariance structures.
+        - [x] Updated C++ core and bindings to support composite covariances (passing component IDs).
+        - [x] Verified with `test-gxe.R` and `test-gs.R`.
 
 ## Completed
 - [x] Align R bindings with Python (variance components, covariance weights, Q-Q plots). (2025-12-07)
@@ -200,3 +244,13 @@
 	- [x] Add integration tests proving Python/R front-ends round-trip the existing Laplace, Kronecker, and survival fixtures through the bindings.
 	- [x] Update documentation/examples to walk through the new APIs and ensure CI instructions reference the front-end tests (python/README.md, docs/examples/formula_frontend.md). (2025-12-15)
 		- Front-end parser tests: `PYTHONPATH=build uv run pytest python/semx/tests -k model_api`, `uv run R -q -e "testthat::test_dir('Rpkg/semx/tests/testthat', filter = 'bindings')"` (2025-12-15)
+
+## Phase 3: Advanced Features
+
+- [x] Implement Multi-group Analysis (blueprint §2.7).
+    - [x] Implement `MultiGroupModelObjective` in C++ core.
+    - [x] Add `fit_multi_group` to `LikelihoodDriver` and expose to bindings.
+    - [x] Add C++ tests for multi-group likelihood and gradients.
+    - [x] Add Python bindings for `fit_multi_group`.
+    - [x] Add R bindings for `fit_multi_group`.
+    - [x] Add Python/R tests for multi-group analysis.

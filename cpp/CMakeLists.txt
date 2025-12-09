@@ -97,6 +97,7 @@ target_link_libraries(_libsemx PRIVATE libsemx)
 
 add_executable(libsemx_tests
     tests/model_graph_tests.cpp
+    tests/covariance_structure_tests.cpp
     tests/gaussian_outcome_tests.cpp
     tests/binomial_outcome_tests.cpp
     tests/poisson_outcome_tests.cpp
@@ -136,6 +137,8 @@ add_executable(libsemx_tests
     tests/sommer_comparison_tests_v2.cpp
     tests/lavaan_comparison_tests.cpp
     tests/survival_comparison_tests.cpp
+    tests/multi_group_tests.cpp
+    tests/sparse_likelihood_tests.cpp
 )
 
 target_link_libraries(libsemx_tests

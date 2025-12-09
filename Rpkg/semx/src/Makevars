@@ -1,7 +1,7 @@
 CXX_STD = CXX20
-PKG_CPPFLAGS = -I../../../cpp/include -I../../../build/_deps/lbfgspp-src/include
+PKG_CPPFLAGS = -I/Users/dakdemir/Library/CloudStorage/OneDrive-NMDP/Year2025/Github/libsemx/cpp/include -I/Users/dakdemir/Library/CloudStorage/OneDrive-NMDP/Year2025/Github/libsemx/build/_deps/lbfgspp-src/include
 
-VPATH = ../../../cpp/src/libsemx
+VPATH = /Users/dakdemir/Library/CloudStorage/OneDrive-NMDP/Year2025/Github/libsemx/cpp/src/libsemx
 
 SOURCES = model_graph.cpp \
           parameter.cpp \

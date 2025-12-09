@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import pandas as pd
-from _libsemx import FitResult, OptimizationResult, OptimizationOptions
+from semx import FitResult, OptimizationResult, OptimizationOptions
 from semx import Model, SemFit
 
 def test_diagnostics_simple_cfa():

@@ -10,7 +10,13 @@ class KroneckerCovariance final : public CovarianceStructure {
 public:
     KroneckerCovariance(std::vector<std::unique_ptr<CovarianceStructure>> components, bool learn_scale = false);
 
+    [[nodiscard]] bool is_sparse() const override;
+
+    [[nodiscard]] Eigen::SparseMatrix<double> materialize_sparse(const std::vector<double>& parameters) const override;
+
     [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
+
+    [[nodiscard]] std::vector<Eigen::SparseMatrix<double>> parameter_gradients_sparse(const std::vector<double>& parameters) const override;
 
     [[nodiscard]] const std::vector<std::unique_ptr<CovarianceStructure>>& components() const { return components_; }
 

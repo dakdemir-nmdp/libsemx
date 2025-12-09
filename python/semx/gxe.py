@@ -12,6 +12,7 @@ def gxe_model(
     genotype: str,
     environment: str,
     genomic: Optional[Union[np.ndarray, Dict[str, Any]]] = None,
+    gxe_structure: str = "diagonal",
     family: str = "gaussian",
 ) -> Tuple[Model, pd.DataFrame]:
     """
@@ -28,7 +29,8 @@ def gxe_model(
       4. A random intercept for the GxE interaction (G:E).
 
     If ``genomic`` is provided, the G term uses the provided relationship matrix.
-    The GxE term currently defaults to a diagonal (independent) structure.
+    The GxE term defaults to a diagonal (independent) structure, but can be set
+    to "kronecker" to use Kronecker(K_g, I_e).
 
     Args:
         formula: A string specifying the fixed effects (e.g., "yield ~ 1").
@@ -37,6 +39,7 @@ def gxe_model(
         environment: The name of the column containing environment identifiers.
         genomic: Optional. A numeric matrix (numpy array) representing the
             genomic relationship matrix (GRM) for the genotypes.
+        gxe_structure: Structure of GxE covariance ("diagonal" or "kronecker").
         family: The outcome family (default: "gaussian").
 
     Returns:
@@ -53,9 +56,7 @@ def gxe_model(
     interaction_col = f"{genotype}:{environment}"
     # We modify a copy to avoid side effects on the user's dataframe
     data = data.copy()
-    if interaction_col not in data.columns:
-        data[interaction_col] = data[genotype].astype(str) + ":" + data[environment].astype(str)
-
+    
     # Encode grouping variables to integers (0-based indices)
     # This is required because the C++ core expects numeric data.
     # We use sort=True to ensure deterministic mapping (e.g. matching sorted GRM).
@@ -69,9 +70,6 @@ def gxe_model(
 
     if data[environment].dtype == object or data[environment].dtype.name == "category":
         data[environment] = pd.factorize(data[environment], sort=True)[0]
-
-    if data[interaction_col].dtype == object or data[interaction_col].dtype.name == "category":
-        data[interaction_col] = pd.factorize(data[interaction_col], sort=True)[0]
 
     # Inject intercept column explicitly since we are bypassing the formula parser's auto-injection
     if "_intercept" not in data.columns:
@@ -96,13 +94,7 @@ def gxe_model(
         # semx.Model expects genomic dict: name -> {markers: ...}
         genomic_args[cov_name] = {"markers": genomic}
         re_g["covariance"] = cov_name
-        
-        # We must also register the covariance definition
-        covariances.append({
-            "name": cov_name,
-            "structure": "genomic",
-            "dimension": 1
-        })
+        # Note: We rely on Model to create the covariance spec from genomic_args
     else:
         # Default diagonal covariance
         cov_name = f"cov_{genotype}"
@@ -131,19 +123,67 @@ def gxe_model(
     random_effects.append(re_e)
 
     # 3. Interaction Random Effect
-    cov_name_gxe = f"cov_{interaction_col}"
-    re_gxe = {
-        "name": f"u_{interaction_col}",
-        "variables": [interaction_col, "_intercept"],
-        "group": interaction_col,
-        "covariance": cov_name_gxe
-    }
-    covariances.append({
-        "name": cov_name_gxe,
-        "structure": "diagonal",
-        "dimension": 1
-    })
-    random_effects.append(re_gxe)
+    if gxe_structure == "kronecker":
+        if genomic is None:
+             raise ValueError("Kronecker GxE structure requires a genomic matrix.")
+        
+        # Ensure interaction column is coded as product index for Kronecker(K_g, I_e)
+        # Index = g * n_e + e (assuming K_g is outer, I_e is inner)
+        n_e = len(data[environment].unique())
+        n_g = len(data[genotype].unique())
+        
+        data[interaction_col] = data[genotype] * n_e + data[environment]
+        
+        cov_name_ge = "K_ge"
+        cov_name_ie = "I_e"
+        
+        # Define I_e
+        covariances.append({
+            "name": cov_name_ie,
+            "structure": "identity",
+            "dimension": n_e
+        })
+        
+        # Define K_ge
+        covariances.append({
+            "name": cov_name_ge,
+            "structure": "kronecker",
+            "dimension": n_g * n_e,
+            "components": [
+                {"id": "K_g"},
+                {"id": cov_name_ie}
+            ]
+        })
+        
+        re_ge = {
+            "name": f"u_{interaction_col}",
+            "variables": [interaction_col, "_intercept"],
+            "group": interaction_col,
+            "covariance": cov_name_ge
+        }
+        random_effects.append(re_ge)
+        
+    else:
+        # Default diagonal
+        if interaction_col not in data.columns:
+            data[interaction_col] = data[genotype].astype(str) + ":" + data[environment].astype(str)
+        
+        if data[interaction_col].dtype == object or data[interaction_col].dtype.name == "category":
+            data[interaction_col] = pd.factorize(data[interaction_col], sort=True)[0]
+            
+        cov_name_gxe = f"cov_{interaction_col}"
+        re_gxe = {
+            "name": f"u_{interaction_col}",
+            "variables": [interaction_col, "_intercept"],
+            "group": interaction_col,
+            "covariance": cov_name_gxe
+        }
+        covariances.append({
+            "name": cov_name_gxe,
+            "structure": "diagonal",
+            "dimension": 1
+        })
+        random_effects.append(re_gxe)
 
     # Prepare families
     families = {response: family}

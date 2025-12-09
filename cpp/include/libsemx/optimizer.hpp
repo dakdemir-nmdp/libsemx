@@ -18,6 +18,8 @@ struct OptimizationOptions {
     double delta{0.0}; // Delta for convergence test
     int max_linesearch{20}; // Max line search trials
     std::string linesearch_type{"strong_wolfe"}; // "armijo", "wolfe", "strong_wolfe"
+    
+    bool force_laplace{false}; // Force Laplace approximation even for Gaussian
 };
 
 struct OptimizationResult {

@@ -25,8 +25,9 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
                                const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
                                const std::unordered_map<std::string, std::vector<double>>& status,
                                EstimationMethod method,
-                               const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings)
-    : driver_(driver), model_(model), data_(data), fixed_covariance_data_(fixed_covariance_data), status_(status), method_(method), extra_param_mappings_(extra_param_mappings) {
+                               const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings,
+                               bool force_laplace)
+    : driver_(driver), model_(model), data_(data), fixed_covariance_data_(fixed_covariance_data), status_(status), method_(method), extra_param_mappings_(extra_param_mappings), force_laplace_(force_laplace) {
     
     // Pre-calculate stats for observed variables
     std::unordered_map<std::string, double> var_means;
@@ -189,6 +190,7 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
 }
 
 double ModelObjective::value(const std::vector<double>& parameters) const {
+    std::cerr << "ModelObjective::value called" << std::endl;
     const auto constrained = to_constrained(parameters);
     
     if (sem_mode_) {
@@ -292,7 +294,7 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
         }
 
         try {
-            double ll = -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, local_status, local_extra_params, fixed_covariance_data_, method_);
+            double ll = -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, local_status, local_extra_params, fixed_covariance_data_, method_, force_laplace_);
             return ll;
         } catch (const std::runtime_error& e) {
             // std::cerr << "ModelObjective::value (SEM) exception: " << e.what() << std::endl;
@@ -307,7 +309,7 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
     build_prediction_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
 
     try {
-        double ll = -driver_.evaluate_model_loglik(model_, data_, linear_predictors, dispersions, covariance_parameters, status_, build_extra_params(constrained), fixed_covariance_data_, method_);
+        double ll = -driver_.evaluate_model_loglik(model_, data_, linear_predictors, dispersions, covariance_parameters, status_, build_extra_params(constrained), fixed_covariance_data_, method_, force_laplace_);
         return ll;
     } catch (const std::runtime_error& e) {
         std::cerr << "ModelObjective::value (Non-SEM) exception: " << e.what() << std::endl;
@@ -322,6 +324,7 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
 }
 
 double ModelObjective::value_and_gradient(const std::vector<double>& parameters, std::vector<double>& grad) const {
+    std::cerr << "ModelObjective::value_and_gradient called" << std::endl;
     const auto constrained = to_constrained(parameters);
     
     if (sem_mode_) {
@@ -498,7 +501,8 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 method_,
                 data_param_mappings,
                 dispersion_param_mappings,
-                mappings
+                mappings,
+                force_laplace_
             );
         } catch (const std::exception& e) {
             // std::cerr << "ModelObjective::value_and_gradient (SEM) exception: " << e.what() << std::endl;
@@ -542,6 +546,7 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
 
 
     std::unordered_map<std::string, std::vector<double>> linear_predictors;
+    std::cerr << "Address of linear_predictors in value_and_gradient: " << &linear_predictors << std::endl;
     std::unordered_map<std::string, std::vector<double>> dispersions;
     std::unordered_map<std::string, std::vector<double>> covariance_parameters;
 
@@ -611,6 +616,7 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             mappings[k] = v;
         }
 
+        std::cerr << "Calling evaluate_model_loglik_and_gradient" << std::endl;
         value_and_grad = driver_.evaluate_model_loglik_and_gradient(
             model_,
             data_,
@@ -623,15 +629,18 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             method_,
             data_param_mappings,
             dispersion_param_mappings,
-            mappings);
+            mappings,
+            force_laplace_,
+            &sparse_accumulator_);
+        std::cerr << "Returned from evaluate_model_loglik_and_gradient" << std::endl;
 
-        if (iteration % 10 == 0 || iteration == 1) {
-            std::cout << "Iter (V&G) " << iteration << " NLL=" << -value_and_grad.first << " Params: ";
-            for (size_t i = 0; i < parameters.size(); ++i) {
-                 std::cout << catalog_.names()[i] << "=" << parameters[i] << " ";
-            }
-            std::cout << std::endl;
-        }
+        // if (iteration % 10 == 0 || iteration == 1) {
+        //     std::cout << "Iter (V&G) " << iteration << " NLL=" << -value_and_grad.first << " Params: ";
+        //     for (size_t i = 0; i < parameters.size(); ++i) {
+        //          std::cout << catalog_.names()[i] << "=" << parameters[i] << " ";
+        //     }
+        //     std::cout << std::endl;
+        // }
     } catch (const std::runtime_error& e) {
         std::cerr << "ModelObjective::value_and_gradient (Non-SEM) exception: " << e.what() << std::endl;
         grad.assign(parameters.size(), 0.0);
@@ -994,6 +1003,7 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
                                                  std::unordered_map<std::string, std::vector<double>>& linear_predictors,
                                                  std::unordered_map<std::string, std::vector<double>>& dispersions,
                                                  std::unordered_map<std::string, std::vector<double>>& covariance_parameters) const {
+    std::cerr << "Building prediction workspaces" << std::endl;
     linear_predictors.clear();
     dispersions.clear();
     covariance_parameters.clear();
@@ -1006,9 +1016,10 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
     }
 
     auto register_response = [&](const std::string& name) {
-        if (!data_.contains(name)) return;
+        if (data_.find(name) == data_.end()) return;
         linear_predictors[name] = std::vector<double>(data_.at(name).size(), 0.0);
         dispersions[name] = std::vector<double>(data_.at(name).size(), 1.0);
+        std::cerr << "Registered response: " << name << " size: " << data_.at(name).size() << std::endl;
     };
 
     for (const auto& var : model_.variables) {
@@ -1016,6 +1027,7 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
             register_response(var.name);
         }
     }
+    std::cerr << "Registered responses finished" << std::endl;
 
     for (const auto& edge : model_.edges) {
         if (edge.kind != EdgeKind::Regression) continue;
@@ -1067,6 +1079,15 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
             params.push_back(constrained_parameters[range.first + i]);
         }
         covariance_parameters[id] = std::move(params);
+    }
+
+    std::cerr << "Verifying linear_predictors..." << std::endl;
+    for(const auto& [k, v] : linear_predictors) {
+        std::cerr << "LP: " << k << " size " << v.size() << std::endl;
+    }
+    std::cerr << "Verifying dispersions..." << std::endl;
+    for(const auto& [k, v] : dispersions) {
+        std::cerr << "Disp: " << k << " size " << v.size() << std::endl;
     }
 }
 
@@ -1185,6 +1206,186 @@ std::unordered_map<std::string, std::vector<std::string>> ModelObjective::build_
         }
     }
     return mappings;
+}
+
+// -----------------------------------------------------------------------------
+// MultiGroupModelObjective
+// -----------------------------------------------------------------------------
+
+MultiGroupModelObjective::MultiGroupModelObjective(std::vector<std::unique_ptr<ModelObjective>> objectives)
+    : objectives_(std::move(objectives)) {
+    if (objectives_.empty()) {
+        throw std::invalid_argument("MultiGroupModelObjective requires at least one objective");
+    }
+
+    // 1. Collect all unique parameter names across all groups
+    // We use a map to keep track of the first occurrence for ordering stability if needed,
+    // or just use a set and then sort?
+    // To be deterministic and user-friendly, we should probably respect the order they appear in the groups.
+    
+    std::vector<std::string> all_names;
+    std::unordered_set<std::string> seen_names;
+    
+    for (const auto& obj : objectives_) {
+        for (const auto& name : obj->parameter_names()) {
+            if (seen_names.find(name) == seen_names.end()) {
+                seen_names.insert(name);
+                all_names.push_back(name);
+            }
+        }
+    }
+    
+    parameter_names_ = std::move(all_names);
+    for (size_t i = 0; i < parameter_names_.size(); ++i) {
+        parameter_name_to_index_[parameter_names_[i]] = i;
+    }
+    
+    // 2. Build mappings from global vector to local vectors
+    global_indices_.resize(objectives_.size());
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        const auto& local_names = objectives_[i]->parameter_names();
+        global_indices_[i].reserve(local_names.size());
+        for (const auto& name : local_names) {
+            auto it = parameter_name_to_index_.find(name);
+            if (it == parameter_name_to_index_.end()) {
+                throw std::logic_error("Parameter name missing from global index: " + name);
+            }
+            global_indices_[i].push_back(it->second);
+        }
+    }
+}
+
+double MultiGroupModelObjective::value(const std::vector<double>& parameters) const {
+    if (parameters.size() != parameter_names_.size()) {
+        throw std::invalid_argument("Parameter vector size mismatch in MultiGroupModelObjective::value");
+    }
+
+    double total_value = 0.0;
+    
+    // We can parallelize this loop if needed
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        std::vector<double> local_params;
+        local_params.reserve(global_indices_[i].size());
+        for (size_t idx : global_indices_[i]) {
+            local_params.push_back(parameters[idx]);
+        }
+        total_value += objectives_[i]->value(local_params);
+    }
+    
+    return total_value;
+}
+
+std::vector<double> MultiGroupModelObjective::gradient(const std::vector<double>& parameters) const {
+    if (parameters.size() != parameter_names_.size()) {
+        throw std::invalid_argument("Parameter vector size mismatch in MultiGroupModelObjective::gradient");
+    }
+
+    std::vector<double> global_gradient(parameters.size(), 0.0);
+    
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        std::vector<double> local_params;
+        local_params.reserve(global_indices_[i].size());
+        for (size_t idx : global_indices_[i]) {
+            local_params.push_back(parameters[idx]);
+        }
+        
+        std::vector<double> local_gradient = objectives_[i]->gradient(local_params);
+        
+        if (local_gradient.size() != global_indices_[i].size()) {
+             throw std::logic_error("Local gradient size mismatch");
+        }
+        
+        for (size_t j = 0; j < local_gradient.size(); ++j) {
+            size_t global_idx = global_indices_[i][j];
+            global_gradient[global_idx] += local_gradient[j];
+        }
+    }
+    
+    return global_gradient;
+}
+
+double MultiGroupModelObjective::value_and_gradient(const std::vector<double>& parameters,
+                                                    std::vector<double>& gradient) const {
+    if (parameters.size() != parameter_names_.size()) {
+        throw std::invalid_argument("Parameter vector size mismatch in MultiGroupModelObjective::value_and_gradient");
+    }
+    
+    gradient.assign(parameters.size(), 0.0);
+    double total_value = 0.0;
+    
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        std::vector<double> local_params;
+        local_params.reserve(global_indices_[i].size());
+        for (size_t idx : global_indices_[i]) {
+            local_params.push_back(parameters[idx]);
+        }
+        
+        std::vector<double> local_gradient;
+        total_value += objectives_[i]->value_and_gradient(local_params, local_gradient);
+        
+        for (size_t j = 0; j < local_gradient.size(); ++j) {
+            size_t global_idx = global_indices_[i][j];
+            gradient[global_idx] += local_gradient[j];
+        }
+    }
+    
+    return total_value;
+}
+
+const std::vector<std::string>& MultiGroupModelObjective::parameter_names() const {
+    return parameter_names_;
+}
+
+std::vector<double> MultiGroupModelObjective::initial_parameters() const {
+    std::vector<double> init_params(parameter_names_.size(), 0.0);
+    std::vector<bool> set_mask(parameter_names_.size(), false);
+    
+    // Iterate through groups and set initial values.
+    // Later groups overwrite earlier ones if they share parameters.
+    // Ideally they should be consistent or we average them?
+    // For now, let's just use the last one or first one.
+    // Let's use the first one encountered.
+    
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        std::vector<double> local_init = objectives_[i]->initial_parameters();
+        for (size_t j = 0; j < local_init.size(); ++j) {
+            size_t global_idx = global_indices_[i][j];
+            if (!set_mask[global_idx]) {
+                init_params[global_idx] = local_init[j];
+                set_mask[global_idx] = true;
+            }
+        }
+    }
+    return init_params;
+}
+
+std::vector<std::vector<double>> MultiGroupModelObjective::split_parameters(const std::vector<double>& global_parameters) const {
+    std::vector<std::vector<double>> result;
+    result.reserve(objectives_.size());
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        std::vector<double> local_params;
+        local_params.reserve(global_indices_[i].size());
+        for (size_t idx : global_indices_[i]) {
+            local_params.push_back(global_parameters[idx]);
+        }
+        result.push_back(std::move(local_params));
+    }
+    return result;
+}
+
+std::vector<double> MultiGroupModelObjective::to_constrained(const std::vector<double>& unconstrained) const {
+    std::vector<double> constrained(unconstrained.size());
+    
+    auto local_params_list = split_parameters(unconstrained);
+    
+    for (size_t i = 0; i < objectives_.size(); ++i) {
+        auto local_constrained = objectives_[i]->to_constrained(local_params_list[i]);
+        for (size_t j = 0; j < local_constrained.size(); ++j) {
+            size_t global_idx = global_indices_[i][j];
+            constrained[global_idx] = local_constrained[j];
+        }
+    }
+    return constrained;
 }
 
 }  // namespace libsemx

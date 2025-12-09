@@ -92,14 +92,16 @@ TEST_CASE("LikelihoodDriver consumes GRM covariance", "[likelihood_driver][genom
     libsemx::ModelIRBuilder builder;
 
     // Dummy variables to achieve Z = I
-    builder.add_variable("id1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("id2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("id1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("id2", libsemx::VariableKind::Exogenous);
 
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("group", libsemx::VariableKind::Grouping);
+    builder.add_variable("re_u", libsemx::VariableKind::Latent);
 
     builder.add_covariance("cov_u", "grm", 2);
     builder.add_random_effect("re_u", {"group", "id1", "id2"}, "cov_u");
+    builder.add_edge(libsemx::EdgeKind::Regression, "re_u", "y", "fixed_1");
 
     auto model = builder.build();
 
@@ -170,11 +172,12 @@ TEST_CASE("LikelihoodDriver handles scaled_fixed covariance", "[likelihood_drive
     // We must declare them as variables so ModelIRBuilder accepts them.
     // We add them BEFORE "y" so that LikelihoodDriver picks "y" as the outcome (it picks the last Observed variable).
     // We must provide a family, even if it's dummy, because ModelIRBuilder enforces it for Observed variables.
-    builder.add_variable("id1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("id2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("id1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("id2", libsemx::VariableKind::Exogenous);
     
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("group", libsemx::VariableKind::Grouping);
+    builder.add_variable("re_u", libsemx::VariableKind::Latent);
     
     // Define covariance structure
     // Dimension 2 (for 2 observations)
@@ -186,6 +189,7 @@ TEST_CASE("LikelihoodDriver handles scaled_fixed covariance", "[likelihood_drive
     // The first variable in the list that is of kind Grouping is the grouping variable.
     // So we need to add "group" to the list.
     builder.add_random_effect("re_u", {"group", "id1", "id2"}, "cov_u");
+    builder.add_edge(libsemx::EdgeKind::Regression, "re_u", "y", "fixed_1");
 
     auto model = builder.build();
 

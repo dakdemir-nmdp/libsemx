@@ -286,9 +286,11 @@ TEST_CASE("LikelihoodDriver fits binomial mixed model with Laplace gradients", "
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
     builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    builder.add_variable("u", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G", "diagonal", 1);
     builder.add_random_effect("u", {"cluster"}, "G");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u", "y", "1");
 
     auto model = builder.build();
     libsemx::LikelihoodDriver driver;
@@ -344,11 +346,15 @@ TEST_CASE("LikelihoodDriver fits multi-effect binomial Laplace model", "[likelih
     builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("batch", libsemx::VariableKind::Grouping);
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
+    builder.add_variable("u_batch", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_cluster", "diagonal", 1);
     builder.add_covariance("G_batch", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "G_cluster");
     builder.add_random_effect("u_batch", {"batch"}, "G_batch");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "1");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_batch", "y", "1");
 
     auto model = builder.build();
     libsemx::LikelihoodDriver driver;
@@ -411,11 +417,15 @@ TEST_CASE("LikelihoodDriver fits mixed covariance Laplace model", "[likelihood_d
     builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("batch", libsemx::VariableKind::Grouping);
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
+    builder.add_variable("u_batch", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_cluster", "diagonal", 1);
     builder.add_covariance("G_batch_fixed", "scaled_fixed", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "G_cluster");
     builder.add_random_effect("u_batch", {"batch"}, "G_batch_fixed");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "1");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_batch", "y", "1");
 
     auto model = builder.build();
     libsemx::LikelihoodDriver driver;
@@ -483,9 +493,11 @@ TEST_CASE("LikelihoodDriver fits random-slope Laplace model", "[likelihood_drive
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("intercept_col", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("z", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("u_cluster2", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_cluster2", "unstructured", 2);
     builder.add_random_effect("u_cluster2", {"cluster", "intercept_col", "z"}, "G_cluster2");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster2", "y", "1");
 
     auto model = builder.build();
     libsemx::LikelihoodDriver driver;
@@ -568,11 +580,15 @@ TEST_CASE("LikelihoodDriver fits Kronecker Laplace model with multi-kernel covar
     builder.add_variable("t1e2", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("t2e1", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("t2e2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("u_kron", libsemx::VariableKind::Latent);
+    builder.add_variable("u_diag", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_kron", "multi_kernel", 4);
     builder.add_covariance("G_diag", "diagonal", 1);
     builder.add_random_effect("u_kron", {"cluster", "t1e1", "t1e2", "t2e1", "t2e2"}, "G_kron");
     builder.add_random_effect("u_diag", {"cluster"}, "G_diag");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_kron", "y", "1");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_diag", "y", "1");
 
     auto model = builder.build();
     libsemx::LikelihoodDriver driver;
