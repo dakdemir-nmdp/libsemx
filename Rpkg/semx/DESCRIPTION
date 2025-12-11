@@ -1,9 +1,9 @@
 Package: semx
 Type: Package
-Title: SEMx R Front-End (Development Placeholder)
-Version: 0.0.0.9000
+Title: Unified SEM and Mixed Model Engine
+Version: 0.1.0
 Authors@R: person("Deniz", "Akdemir", email = "deniz.akdemir.work@gmail.com", role = c("aut", "cre"))
-Description: Placeholder scaffold for the SEMx R interface.
+Description: A high-performance, unified engine for Structural Equation Modeling (SEM) and Generalized Linear Mixed Models (GLMM).
 License: MIT
 Encoding: UTF-8
 LazyData: true
