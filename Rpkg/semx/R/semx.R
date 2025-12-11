@@ -65,7 +65,7 @@ build_semx_ir <- function(variables, edges, covariances, random_effects, paramet
     if (!is.null(parameters)) {
         for (param_name in names(parameters)) {
             val <- parameters[[param_name]]
-            builder$register_parameter(param_name, as.numeric(val))
+            builder$set_parameter_initial_value(param_name, as.numeric(val))
         }
     }
     
@@ -86,13 +86,14 @@ build_semx_ir <- function(variables, edges, covariances, random_effects, paramet
 #' @param genomic Optional named list of genomic covariance specs; each entry should provide
 #'   a numeric matrix `markers` and optional `structure`, `center`, and `normalize` flags.
 #' @param random_effects Optional list of random effect definitions (name, variables, covariance).
+#' @param parameters Optional named list of initial values for parameters.
 #' @param data Optional list or data.frame containing data. If provided, it can be used to resolve
 #'   genomic matrices referenced in `genomic` specs or equations.
 #'
 #' @return A list with class \code{semx_model} that contains the compiled
 #'   \code{ir}, \code{variables}, and \code{edges} components.
 #' @export
-semx_model <- function(equations = NULL, families = NULL, kinds = NULL, covariances = NULL, genomic = NULL, random_effects = NULL, data = NULL) {
+semx_model <- function(equations = NULL, families = NULL, kinds = NULL, covariances = NULL, genomic = NULL, random_effects = NULL, parameters = NULL, data = NULL) {
     if (is.null(equations) && is.null(families)) {
         return(structure(list(
             variables = list(),
@@ -660,7 +661,7 @@ semx_model <- function(equations = NULL, families = NULL, kinds = NULL, covarian
 		}
 	}
 
-	ir <- build_semx_ir(var_defs[var_order], edges, covariances, random_effects)
+	ir <- build_semx_ir(var_defs[var_order], edges, covariances, random_effects, parameters)
 
 	fixed_covariance_data <- list()
 	if (length(genomic_data)) {

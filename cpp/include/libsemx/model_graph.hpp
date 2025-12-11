@@ -25,6 +25,8 @@ public:
                             ParameterConstraint constraint = ParameterConstraint::Free,
                             double initial_value = 0.0);
 
+    void set_parameter_initial_value(const std::string& id, double initial_value);
+
     [[nodiscard]] const std::vector<VariableSpec>& variables() const noexcept;
 
     [[nodiscard]] const std::vector<EdgeSpec>& edges() const noexcept;

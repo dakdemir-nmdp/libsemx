@@ -22,6 +22,10 @@ void ModelIRBuilder::register_parameter(std::string id, double initial_value) {
     graph_.register_parameter(std::move(id), ParameterConstraint::Free, initial_value);
 }
 
+void ModelIRBuilder::set_parameter_initial_value(std::string id, double initial_value) {
+    graph_.set_parameter_initial_value(id, initial_value);
+}
+
 ModelIR ModelIRBuilder::build() const {
     return graph_.to_model_ir();
 }

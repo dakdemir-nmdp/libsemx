@@ -22,6 +22,8 @@ public:
 
     void register_parameter(std::string id, double initial_value = 0.0);
 
+    void set_parameter_initial_value(std::string id, double initial_value);
+
     [[nodiscard]] ModelIR build() const;
 
 private:

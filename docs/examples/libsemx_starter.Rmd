@@ -1,0 +1,116 @@
+---
+title: "Getting Started with libsemx in R"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load libsemx
+# If installed: library(semx)
+# If running from source, adjust path as needed:
+tryCatch(library(semx), error = function(e) {
+  if (file.exists("../../Rpkg/semx")) {
+    devtools::load_all("../../Rpkg/semx")
+  } else {
+    stop("semx package not found.")
+  }
+})
+library(dplyr)
+library(readr)
+```
+
+## Introduction
+
+`libsemx` is a high-performance library for Structural Equation Modeling (SEM) and Linear Mixed Models (LMM). This notebook demonstrates its usage in R.
+
+## 1. Linear Mixed Models (LMM)
+
+We use the `sleepstudy` dataset to fit a random slope model:
+`Reaction ~ Days + (Days | Subject)`
+
+```{r lmm}
+# Load data
+sleep_df <- read_csv("../../data/sleepstudy.csv", show_col_types = FALSE)
+
+# Preprocess
+if ("rownames" %in% names(sleep_df)) sleep_df$rownames <- NULL
+sleep_df$Reaction <- sleep_df$Reaction / 100.0 # Scale for stability
+
+# Define Model
+model_lmm <- semx_model(
+  equations = c("Reaction ~ Days + (Days | Subject)"),
+  families = c(Reaction = "gaussian")
+)
+
+# Fit Model
+fit_lmm <- semx_fit(model_lmm, sleep_df)
+
+# Summary
+summary(fit_lmm)
+```
+
+## 2. Structural Equation Modeling (SEM)
+
+We use the `bfi` dataset for Confirmatory Factor Analysis (CFA).
+
+```{r sem}
+# Load data
+bfi_df <- read_csv("../../data/bfi.csv", show_col_types = FALSE)
+if ("rownames" %in% names(bfi_df)) bfi_df$rownames <- NULL
+bfi_df <- na.omit(bfi_df)
+bfi_df <- head(bfi_df, 1000) # Subset for demo
+
+# Standardize items
+item_cols <- c(paste0("A", 1:5), paste0("C", 1:5), paste0("E", 1:5), paste0("N", 1:5), paste0("O", 1:5))
+bfi_df[item_cols] <- scale(bfi_df[item_cols])
+
+# Define Model
+# We fix latent variances to 1.0 and free the first loading for better scaling
+equations <- c(
+  "Agreeableness =~ NA*A1 + A2 + A3 + A4 + A5",
+  "Conscientiousness =~ NA*C1 + C2 + C3 + C4 + C5",
+  "Extraversion =~ NA*E1 + E2 + E3 + E4 + E5",
+  "Neuroticism =~ NA*N1 + N2 + N3 + N4 + N5",
+  "Openness =~ NA*O1 + O2 + O3 + O4 + O5",
+  "Agreeableness ~~ 1*Agreeableness",
+  "Conscientiousness ~~ 1*Conscientiousness",
+  "Extraversion ~~ 1*Extraversion",
+  "Neuroticism ~~ 1*Neuroticism",
+  "Openness ~~ 1*Openness"
+)
+
+families <- setNames(rep("gaussian", length(item_cols)), item_cols)
+
+# Set initial values for better convergence
+# Loadings ~ 0.5, Variances ~ 0.5
+params <- list()
+for (eq in equations) {
+  if (grepl("=~", eq)) {
+    parts <- strsplit(eq, "=~")[[1]]
+    latent <- trimws(parts[1])
+    indicators <- trimws(strsplit(parts[2], "\\+")[[1]])
+    
+    # Loadings
+    for (ind_raw in indicators) {
+      # Remove "NA*" prefix if present
+      ind <- gsub("NA\\*", "", trimws(ind_raw))
+      params[[paste0("lambda_", ind, "_on_", latent)]] <- 0.5
+      
+      # Residual variances
+      params[[paste0("psi_", ind, "_", ind)]] <- 0.5
+    }
+  }
+}
+
+model_cfa <- semx_model(
+  equations = equations,
+  families = families,
+  parameters = params
+)
+
+# Fit Model
+fit_cfa <- semx_fit(model_cfa, bfi_df)
+
+# Summary
+summary(fit_cfa)
+```

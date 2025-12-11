@@ -636,6 +636,7 @@ RCPP_MODULE(semx) {
         .method("add_covariance", &ModelIRBuilder_add_covariance)
         .method("add_random_effect", &ModelIRBuilder::add_random_effect)
         .method("register_parameter", &ModelIRBuilder::register_parameter)
+        .method("set_parameter_initial_value", &ModelIRBuilder::set_parameter_initial_value)
         .method("build", &ModelIRBuilder_build)
     ;
 

@@ -141,6 +141,16 @@ void ModelGraph::register_parameter(std::string id,
     parameters_.push_back(std::move(spec));
 }
 
+void ModelGraph::set_parameter_initial_value(const std::string& id, double initial_value) {
+    auto it = parameter_index_.find(id);
+    if (it == parameter_index_.end()) {
+        // If parameter doesn't exist, register it as Free
+        register_parameter(id, ParameterConstraint::Free, initial_value);
+    } else {
+        parameters_[it->second].initial_value = initial_value;
+    }
+}
+
 const std::vector<VariableSpec>& ModelGraph::variables() const noexcept {
     return variables_;
 }
