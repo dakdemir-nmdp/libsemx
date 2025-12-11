@@ -30,6 +30,9 @@ OutcomeEvaluation GaussianOutcome::evaluate(double observed,
     //                  = 0.5 * (resid^2/sigma^2 - 1) / sigma^2
     eval.d_dispersion = 0.5 * (residual * residual * inv_variance - 1.0) * inv_variance;
     
+    // d(d2_ll/d_eta2)/d(sigma^2) = d(-1/sigma^2)/d(sigma^2) = 1/(sigma^2)^2
+    eval.d_hessian_d_dispersion = inv_variance * inv_variance;
+
     return eval;
 }
 

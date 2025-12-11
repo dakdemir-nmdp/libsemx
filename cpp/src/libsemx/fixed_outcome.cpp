@@ -7,7 +7,7 @@ OutcomeEvaluation FixedOutcome::evaluate(double /*observed*/,
                                           double /*dispersion*/,
                                           double /*status*/,
                                           const std::vector<double>& /*extra_params*/) const {
-    return {0.0, 0.0, 0.0, 0.0, 0.0, {}};
+    return {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, {}};
 }
 
 }  // namespace libsemx

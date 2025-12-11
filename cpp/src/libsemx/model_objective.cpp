@@ -206,34 +206,34 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
         size_t n_outcomes = sem_outcomes_.size();
         size_t total_rows = n_obs * n_outcomes;
 
-        for (const auto& edge : model_.edges) {
-            if (edge.kind == EdgeKind::Regression) {
-                auto it = std::find(sem_outcomes_.begin(), sem_outcomes_.end(), edge.target);
-                if (it != sem_outcomes_.end()) {
-                    size_t outcome_idx = std::distance(sem_outcomes_.begin(), it);
-                    if (data_.count(edge.source)) {
-                        double weight = 0.0;
-                        if (!edge.parameter_id.empty()) {
-                            size_t idx = catalog_.find_index(edge.parameter_id);
-                            if (idx != ParameterCatalog::npos) {
-                                weight = constrained[idx];
-                            } else {
-                                try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                            }
-                        } else {
-                            try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                        }
-                        
-                        const auto& src_vec = data_.at(edge.source);
-                        for (size_t i = 0; i < n_obs; ++i) {
-                            lp[i * n_outcomes + outcome_idx] += src_vec[i] * weight;
+        // In SEM mode, fixed effects are handled via sem_model_.edges (mapped to _stacked_y)
+        // We do NOT iterate model_.edges here to avoid double counting.
+        
+        // Handle SEM-specific regression edges (e.g. latent means and mapped fixed effects)
+        for (const auto& edge : sem_model_.edges) {
+            if (edge.kind == EdgeKind::Regression && edge.target == "_stacked_y") {
+                double weight = 0.0;
+                if (!edge.parameter_id.empty()) {
+                    size_t idx = catalog_.find_index(edge.parameter_id);
+                    if (idx != ParameterCatalog::npos) {
+                        weight = constrained[idx];
+                    } else {
+                        try { weight = std::stod(edge.parameter_id); } catch(...) {}
+                    }
+                } else {
+                    try { weight = std::stod(edge.parameter_id); } catch(...) {}
+                }
+
+                if (sem_data_.count(edge.source)) {
+                    const auto& src_vec = sem_data_.at(edge.source);
+                    if (src_vec.size() == lp.size()) {
+                        for(size_t i=0; i<src_vec.size(); ++i) {
+                            lp[i] += src_vec[i] * weight;
                         }
                     }
                 }
             }
         }
-        
-        // 2. Dispersions
         std::vector<double> disp(total_rows, 1.0);
         for (const auto& info : residual_infos_) {
             double val = info.fixed_value;
@@ -339,34 +339,10 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
         size_t n_outcomes = sem_outcomes_.size();
         size_t total_rows = n_obs * n_outcomes;
 
-        for (const auto& edge : model_.edges) {
-            if (edge.kind == EdgeKind::Regression) {
-                auto it = std::find(sem_outcomes_.begin(), sem_outcomes_.end(), edge.target);
-                if (it != sem_outcomes_.end()) {
-                    size_t outcome_idx = std::distance(sem_outcomes_.begin(), it);
-                    if (data_.count(edge.source)) {
-                        double weight = 0.0;
-                        if (!edge.parameter_id.empty()) {
-                            size_t idx = catalog_.find_index(edge.parameter_id);
-                            if (idx != ParameterCatalog::npos) {
-                                weight = constrained[idx];
-                            } else {
-                                try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                            }
-                        } else {
-                            try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                        }
-                        
-                        const auto& src_vec = data_.at(edge.source);
-                        for (size_t i = 0; i < n_obs; ++i) {
-                            lp[i * n_outcomes + outcome_idx] += src_vec[i] * weight;
-                        }
-                    }
-                }
-            }
-        }
+        // In SEM mode, fixed effects are handled via sem_model_.edges (mapped to _stacked_y)
+        // We do NOT iterate model_.edges here to avoid double counting.
 
-        // Handle SEM-specific regression edges (e.g. latent means)
+        // Handle SEM-specific regression edges (e.g. latent means and mapped fixed effects)
         for (const auto& edge : sem_model_.edges) {
             if (edge.kind == EdgeKind::Regression && edge.target == "_stacked_y") {
                 double weight = 0.0;
@@ -1044,6 +1020,8 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
             for (size_t i = 0; i < tgt_lp.size(); ++i) {
                 tgt_lp[i] += src_data[i] * weight;
             }
+        } else {
+            // std::cout << "Skipping LP update for " << edge.target << " from " << edge.source << std::endl;
         }
     }
 

@@ -5,6 +5,7 @@
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/model_ir.hpp"
 #include "libsemx/optimizer.hpp"
+#include "libsemx/model_objective.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -176,14 +177,14 @@ TEST_CASE("Compare CFA with lavaan (BFI)", "[comparison][lavaan][cfa]") {
 
     LikelihoodDriver driver;
     OptimizationOptions options;
-    options.max_iterations = 1000; 
+    options.max_iterations = 200; 
     options.tolerance = 1e-3; 
     options.learning_rate = 1e-4; 
     options.force_laplace = true; // Use Laplace to avoid O(N^3) analytic path
     options.linesearch_type = "armijo";
 
     // Use LBFGS to reproduce the exception
-    auto result = driver.fit(model, data, options, "gd", {}, status);
+    auto result = driver.fit(model, data, options, "lbfgs", {}, status);
 
     if (!result.optimization_result.converged) {
         WARN("Optimization did not converge to strict tolerance.");

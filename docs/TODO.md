@@ -37,7 +37,8 @@
         - [x] Validate Random Effects (BLUPs) against `lme4`.
         - [x] Create SEM comparison against `lavaan` (Growth Curve or CFA).
             - [x] Implemented CFA comparison using BFI dataset.
-            - [ ] Investigate BFI CFA convergence failure (LBFGS Line Search Error).
+            - [x] Investigate BFI CFA convergence failure (LBFGS Line Search Error).
+                - [x] Fixed gradient mismatch by adding missing Hessian derivative term for dispersion parameters in Laplace approximation path.
             - [x] Validated LogLik against `lavaan` (Fit indices currently disabled due to missing baseline model).
             - [x] Fixed SRMR calculation by converting Cholesky parameters back to Covariance parameters in `ModelObjective`.
             - [x] Addressed convergence issues by relaxing tolerance and using Release build.

@@ -2260,6 +2260,99 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
                 group_maps.push_back(build_group_map(info, data, n));
             }
 
+            // Check for block diagonal structure (single grouping variable)
+            bool block_diagonal = !random_effect_infos.empty();
+            std::string common_grouping;
+            if (block_diagonal) {
+                common_grouping = random_effect_infos[0].grouping_var;
+                for (size_t i = 1; i < random_effect_infos.size(); ++i) {
+                    if (random_effect_infos[i].grouping_var != common_grouping) {
+                        block_diagonal = false;
+                        break;
+                    }
+                }
+            }
+
+            if (block_diagonal) {
+                double total_ll = 0.0;
+                const auto& groups = group_maps[0];
+                double log_2pi = std::log(2.0 * 3.14159265358979323846);
+
+                for (const auto& [group_id, indices] : groups) {
+                    size_t n_i = indices.size();
+                    std::vector<double> V_i(n_i * n_i, 0.0);
+                    
+                    // Diagonal (Residuals)
+                    for(size_t r=0; r<n_i; ++r) {
+                        V_i[r * n_i + r] = outcome.disp[indices[r]];
+                    }
+
+                    // Random Effects
+                    for (size_t re_idx = 0; re_idx < random_effect_infos.size(); ++re_idx) {
+                        const auto& info = random_effect_infos[re_idx];
+                        auto Z_i = build_design_matrix(info, indices, data, linear_predictors);
+                        size_t q = info.cov_spec->dimension;
+
+                        std::vector<double> ZG(n_i * q, 0.0);
+                        if (info.is_sparse) {
+                            if (!info.G_sparse) throw std::runtime_error("G_sparse is null");
+                            Eigen::Map<const RowMajorMatrix> Z_map(Z_i.data(), n_i, q);
+                            Eigen::MatrixXd Z_dense = Z_map;
+                            Eigen::MatrixXd ZG_eigen = Z_dense * *info.G_sparse;
+                            Eigen::Map<RowMajorMatrix>(ZG.data(), n_i, q) = ZG_eigen;
+                        } else {
+                            for (std::size_t r = 0; r < n_i; ++r) {
+                                for (std::size_t c = 0; c < q; ++c) {
+                                    double sum = 0.0;
+                                    for (std::size_t k = 0; k < q; ++k) {
+                                        sum += Z_i[r * q + k] * info.G_matrix[k * q + c];
+                                    }
+                                    ZG[r * q + c] = sum;
+                                }
+                            }
+                        }
+
+                        for (std::size_t r = 0; r < n_i; ++r) {
+                            for (std::size_t c = 0; c < n_i; ++c) {
+                                double sum = 0.0;
+                                for (std::size_t k = 0; k < q; ++k) {
+                                    sum += ZG[r * q + k] * Z_i[c * q + k];
+                                }
+                                V_i[r * n_i + c] += sum;
+                            }
+                        }
+                    }
+
+                    // Compute LL_i
+                    std::vector<double> resid_i(n_i);
+                    bool has_nan = false;
+                    for(size_t r=0; r<n_i; ++r) {
+                        if (std::isnan(outcome.obs[indices[r]])) {
+                            has_nan = true; 
+                            break; 
+                        }
+                        resid_i[r] = outcome.obs[indices[r]] - outcome.pred[indices[r]];
+                    }
+                    if (has_nan) continue; 
+
+                    std::vector<double> L_i(n_i * n_i);
+                    try {
+                        cholesky(n_i, V_i, L_i);
+                    } catch(...) {
+                        return -std::numeric_limits<double>::infinity();
+                    }
+
+                    double log_det = log_det_cholesky(n_i, L_i);
+                    auto alpha = solve_cholesky(n_i, L_i, resid_i);
+                    double quad = 0.0;
+                    for(size_t r=0; r<n_i; ++r) quad += resid_i[r] * alpha[r];
+
+                    total_ll += -0.5 * (n_i * log_2pi + log_det + quad);
+                }
+                
+                return total_ll;
+            }
+
             std::vector<double> V_full(n * n, 0.0);
             for (std::size_t i = 0; i < n; ++i) {
                 V_full[i * n + i] = outcome.disp[i];
@@ -3944,6 +4037,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                         const std::string& pid = mapping.pattern[idx];
                         if (!pid.empty()) {
                             gradients[pid] += laplace_result.evaluations[eval_offset + i].d_dispersion;
+                            gradients[pid] += 0.5 * laplace_result.evaluations[eval_offset + i].d_hessian_d_dispersion * quad_terms[i];
                         }
                     }
                 }

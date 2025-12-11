@@ -11,6 +11,7 @@ struct OutcomeEvaluation {
     double second_derivative{0.0};
     double third_derivative{0.0};
     double d_dispersion{0.0};
+    double d_hessian_d_dispersion{0.0};
     std::vector<double> d_extra_params{};
     std::vector<double> d_hessian_d_extra_params{};
 };

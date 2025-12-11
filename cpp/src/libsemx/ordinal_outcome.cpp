@@ -152,7 +152,7 @@ OutcomeEvaluation OrdinalOutcome::evaluate(double observed,
         compute_d_hess(k, dP, dPp, dPpp);
     }
 
-    return {log_lik, grad, hess, third, 0.0, d_extra, d_hess_extra};
+    return {log_lik, grad, hess, third, 0.0, 0.0, d_extra, d_hess_extra};
 }
 
 double OrdinalOutcome::default_dispersion(std::size_t /*n*/) const {

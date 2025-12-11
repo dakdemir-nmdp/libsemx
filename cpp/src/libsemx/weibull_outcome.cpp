@@ -65,7 +65,7 @@ OutcomeEvaluation WeibullOutcome::evaluate(double observed,
         d_dispersion += delta / k;
     }
 
-    return {log_lik, grad, hess, third, d_dispersion};
+    return {log_lik, grad, hess, third, d_dispersion, 0.0};
 }
 
 double WeibullOutcome::default_dispersion(std::size_t /*n*/) const {
