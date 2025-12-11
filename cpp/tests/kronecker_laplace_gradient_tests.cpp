@@ -31,12 +31,12 @@ std::vector<double> kronecker_product(const std::vector<double>& A,
 libsemx::ModelIR build_model() {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    builder.add_variable("t1e1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("t1e2", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("t2e1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("t2e2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t1e1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("t1e2", libsemx::VariableKind::Exogenous);
+    builder.add_variable("t2e1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("t2e2", libsemx::VariableKind::Exogenous);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_kron", "multi_kernel", 4);
     builder.add_covariance("G_diag", "diagonal", 1);

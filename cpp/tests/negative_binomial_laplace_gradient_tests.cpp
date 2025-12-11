@@ -13,11 +13,18 @@ namespace {
 libsemx::ModelIR build_negative_binomial_model() {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "negative_binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    // Add random effect as latent variable
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
+
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_nb", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "G_nb");
+    
+    // Connect random effect to outcome
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "1.0");
+    
     return builder.build();
 }
 

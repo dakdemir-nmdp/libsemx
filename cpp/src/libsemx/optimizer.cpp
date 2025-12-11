@@ -171,7 +171,6 @@ OptimizationResult LBFGSOptimizer::optimize(const ObjectiveFunction& function,
         param.linesearch = LBFGSpp::LBFGS_LINESEARCH_BACKTRACKING_STRONG_WOLFE;
     }
     
-    LBFGSpp::LBFGSSolver<double> solver(param);
     LBFGSFunctor functor(function);
     
     Eigen::VectorXd x = Eigen::Map<Eigen::VectorXd>(initial_parameters.data(), initial_parameters.size());
@@ -179,7 +178,13 @@ OptimizationResult LBFGSOptimizer::optimize(const ObjectiveFunction& function,
     
     int niter = 0;
     try {
-        niter = solver.minimize(functor, x, fx);
+        if (options.linesearch_type == "armijo" || options.linesearch_type == "wolfe") {
+            LBFGSpp::LBFGSSolver<double, LBFGSpp::LineSearchBacktracking> solver(param);
+            niter = solver.minimize(functor, x, fx);
+        } else {
+            LBFGSpp::LBFGSSolver<double> solver(param);
+            niter = solver.minimize(functor, x, fx);
+        }
     } catch (const std::exception& e) {
         std::cerr << "LBFGSOptimizer: exception caught: " << e.what() << std::endl;
         GradientDescentOptimizer fallback;

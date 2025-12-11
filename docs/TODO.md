@@ -31,14 +31,17 @@
         - [x] Implemented `ExplicitCovariance` to support standard SEM parameterization (elements of $\Sigma$).
         - [x] Debug segfault in R validation script (Fixed: `ModelObjective` now correctly handles gradient vector resizing on exception).
         - [x] Align C++ core results with `lme4` for `sleepstudy` dataset (Fixed: Dispersion parameter estimation in non-SEM mode).
+            - [x] Fixed regression in Sleepstudy test (2025-02-24).
         - [x] Validate AIC, BIC, LogLik against `lme4`.
         - [x] Create Binomial GLMM comparison (binary outcome) against `lme4::glmer`.
         - [x] Validate Random Effects (BLUPs) against `lme4`.
         - [x] Create SEM comparison against `lavaan` (Growth Curve or CFA).
             - [x] Implemented CFA comparison using BFI dataset.
+            - [ ] Investigate BFI CFA convergence failure (LBFGS Line Search Error).
             - [x] Validated LogLik against `lavaan` (Fit indices currently disabled due to missing baseline model).
             - [x] Fixed SRMR calculation by converting Cholesky parameters back to Covariance parameters in `ModelObjective`.
             - [x] Addressed convergence issues by relaxing tolerance and using Release build.
+            - [x] Fix performance regression in BFI CFA test (Decoupled gradient computation).
         - [x] Comprehensive validation of covariance structures (Random Intercept, Random Slope) against `lme4`.
         - [x] Fix `ModelObjective` to correctly handle fixed covariance parameters (e.g. fixed residual variance) by parsing numeric parameter IDs.
         - [x] Create GBLUP/GxE comparison against `sommer` (Coefficients, BLUPs, Fit Indices).

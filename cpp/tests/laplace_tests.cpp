@@ -12,10 +12,15 @@ TEST_CASE("LikelihoodDriver evaluates Laplace for Binomial GLMM", "[laplace][mix
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
+    // Add random effect as a latent variable so we can draw edges from it
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
     
     // Random intercept: u ~ N(0, tau^2)
     builder.add_covariance("tau_sq", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+    
+    // Connect random effect to outcome
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "one");
 
     auto model = builder.build();
 
@@ -64,6 +69,11 @@ TEST_CASE("Laplace fit mixes new covariance structures", "[laplace][covariance]"
     builder.add_variable("x", libsemx::VariableKind::Latent);
     builder.add_variable("z0", libsemx::VariableKind::Latent);
     builder.add_variable("z1", libsemx::VariableKind::Latent);
+    
+    // Add random effects as latent variables
+    builder.add_variable("u_cs", libsemx::VariableKind::Latent);
+    builder.add_variable("u_diag", libsemx::VariableKind::Latent);
+    builder.add_variable("u_toep", libsemx::VariableKind::Latent);
 
     builder.add_covariance("G_cs", "compound_symmetry", 2);
     builder.add_covariance("G_diag", "diagonal", 1);
@@ -72,6 +82,11 @@ TEST_CASE("Laplace fit mixes new covariance structures", "[laplace][covariance]"
     builder.add_random_effect("u_cs", {"cluster", "intercept", "x"}, "G_cs");
     builder.add_random_effect("u_diag", {"cluster"}, "G_diag");
     builder.add_random_effect("u_toep", {"cluster", "z0", "z1"}, "G_toep");
+    
+    // Connect random effects to outcome
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cs", "y", "one");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_diag", "y", "one");
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_toep", "y", "one");
 
     auto model = builder.build();
 
@@ -109,7 +124,8 @@ TEST_CASE("Laplace fit mixes new covariance structures", "[laplace][covariance]"
     double loglik = driver.evaluate_model_loglik(model, data, linear_predictors, dispersions, covariance_parameters);
 
     REQUIRE(std::isfinite(loglik));
-    REQUIRE_THAT(loglik, Catch::Matchers::WithinAbs(-3.224501, 1e-3));
+    // Updated expectation based on corrected edge connectivity
+    REQUIRE_THAT(loglik, Catch::Matchers::WithinAbs(-3.294426, 1e-3));
 }
 
 TEST_CASE("LikelihoodDriver evaluates Laplace for Poisson GLMM", "[laplace][poisson]") {

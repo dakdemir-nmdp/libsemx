@@ -46,19 +46,28 @@ TEST_CASE("UnstructuredCovariance materializes symmetric matrix", "[covariance]"
     REQUIRE(cov.dimension() == 3);
     REQUIRE(cov.parameter_count() == 6);
 
+    // Parameters are Cholesky factor L (lower triangular)
+    // L = [ 1.0  0.0  0.0 ]
+    //     [ 0.2  2.0  0.0 ]
+    //     [ 0.3  0.4  3.0 ]
     const std::vector<double> params{1.0, 0.2, 2.0, 0.3, 0.4, 3.0};
     const auto matrix = cov.materialize(params);
+
+    // Sigma = L * L^T
+    // [ 1.0   0.2   0.3  ]
+    // [ 0.2   4.04  0.86 ]
+    // [ 0.3   0.86  9.25 ]
 
     REQUIRE(matrix.size() == 9);
     REQUIRE(matrix[0] == Catch::Approx(1.0));
     REQUIRE(matrix[1] == Catch::Approx(0.2));
     REQUIRE(matrix[2] == Catch::Approx(0.3));
     REQUIRE(matrix[3] == Catch::Approx(0.2));
-    REQUIRE(matrix[4] == Catch::Approx(2.0));
-    REQUIRE(matrix[5] == Catch::Approx(0.4));
+    REQUIRE(matrix[4] == Catch::Approx(4.04));
+    REQUIRE(matrix[5] == Catch::Approx(0.86));
     REQUIRE(matrix[6] == Catch::Approx(0.3));
-    REQUIRE(matrix[7] == Catch::Approx(0.4));
-    REQUIRE(matrix[8] == Catch::Approx(3.0));
+    REQUIRE(matrix[7] == Catch::Approx(0.86));
+    REQUIRE(matrix[8] == Catch::Approx(9.25));
 }
 
 TEST_CASE("UnstructuredCovariance rejects invalid parameters", "[covariance]") {
@@ -94,7 +103,8 @@ TEST_CASE("CompoundSymmetryCovariance materializes block structure", "[covarianc
 
 TEST_CASE("AR1Covariance produces decaying correlations", "[covariance]") {
     libsemx::AR1Covariance cov(4);
-    const std::vector<double> params{1.2, 3.0};
+    // Variance = 1.2, Rho = 0.5 -> param = atanh(0.5)
+    const std::vector<double> params{1.2, std::atanh(0.5)};
     const auto matrix = cov.materialize(params);
     REQUIRE(matrix[0] == Catch::Approx(1.2));
     REQUIRE(matrix[1] == Catch::Approx(0.6));
@@ -105,7 +115,10 @@ TEST_CASE("AR1Covariance produces decaying correlations", "[covariance]") {
 
 TEST_CASE("ToeplitzCovariance honors lag parameters", "[covariance]") {
     libsemx::ToeplitzCovariance cov(3);
-    const std::vector<double> params{2.0, 3.0, 1.0};
+    // Variance = 2.0
+    // rho1 = 0.5 -> kappa1 = 0.5 -> param = atanh(0.5)
+    // rho2 = 0.25 -> kappa2 = 0.0 -> param = 0.0
+    const std::vector<double> params{2.0, std::atanh(0.5), 0.0};
     const auto matrix = cov.materialize(params);
     REQUIRE(matrix[0] == Catch::Approx(2.0));
     REQUIRE(matrix[1] == Catch::Approx(1.0));

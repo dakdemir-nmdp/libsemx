@@ -12,8 +12,8 @@ TEST_CASE("LikelihoodDriver evaluates REML for Gaussian Random Intercept", "[rem
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    // Use Latent to avoid LikelihoodDriver treating it as an outcome, but provide data for it.
-    builder.add_variable("const", libsemx::VariableKind::Latent); 
+    // Use Exogenous to avoid LikelihoodDriver treating it as an outcome, but provide data for it.
+    builder.add_variable("const", libsemx::VariableKind::Exogenous); 
     
     // Random intercept: u ~ N(0, tau^2)
     builder.add_covariance("tau_sq", "diagonal", 1);

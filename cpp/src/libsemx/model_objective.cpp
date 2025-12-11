@@ -190,7 +190,6 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
 }
 
 double ModelObjective::value(const std::vector<double>& parameters) const {
-    std::cerr << "ModelObjective::value called" << std::endl;
     const auto constrained = to_constrained(parameters);
     
     if (sem_mode_) {
@@ -324,7 +323,6 @@ std::vector<double> ModelObjective::gradient(const std::vector<double>& paramete
 }
 
 double ModelObjective::value_and_gradient(const std::vector<double>& parameters, std::vector<double>& grad) const {
-    std::cerr << "ModelObjective::value_and_gradient called" << std::endl;
     const auto constrained = to_constrained(parameters);
     
     if (sem_mode_) {
@@ -546,7 +544,6 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
 
 
     std::unordered_map<std::string, std::vector<double>> linear_predictors;
-    std::cerr << "Address of linear_predictors in value_and_gradient: " << &linear_predictors << std::endl;
     std::unordered_map<std::string, std::vector<double>> dispersions;
     std::unordered_map<std::string, std::vector<double>> covariance_parameters;
 
@@ -616,7 +613,6 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             mappings[k] = v;
         }
 
-        std::cerr << "Calling evaluate_model_loglik_and_gradient" << std::endl;
         value_and_grad = driver_.evaluate_model_loglik_and_gradient(
             model_,
             data_,
@@ -632,7 +628,6 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
             mappings,
             force_laplace_,
             &sparse_accumulator_);
-        std::cerr << "Returned from evaluate_model_loglik_and_gradient" << std::endl;
 
         // if (iteration % 10 == 0 || iteration == 1) {
         //     std::cout << "Iter (V&G) " << iteration << " NLL=" << -value_and_grad.first << " Params: ";
@@ -1003,7 +998,6 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
                                                  std::unordered_map<std::string, std::vector<double>>& linear_predictors,
                                                  std::unordered_map<std::string, std::vector<double>>& dispersions,
                                                  std::unordered_map<std::string, std::vector<double>>& covariance_parameters) const {
-    std::cerr << "Building prediction workspaces" << std::endl;
     linear_predictors.clear();
     dispersions.clear();
     covariance_parameters.clear();
@@ -1019,7 +1013,6 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
         if (data_.find(name) == data_.end()) return;
         linear_predictors[name] = std::vector<double>(data_.at(name).size(), 0.0);
         dispersions[name] = std::vector<double>(data_.at(name).size(), 1.0);
-        std::cerr << "Registered response: " << name << " size: " << data_.at(name).size() << std::endl;
     };
 
     for (const auto& var : model_.variables) {
@@ -1027,7 +1020,6 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
             register_response(var.name);
         }
     }
-    std::cerr << "Registered responses finished" << std::endl;
 
     for (const auto& edge : model_.edges) {
         if (edge.kind != EdgeKind::Regression) continue;
@@ -1079,15 +1071,6 @@ void ModelObjective::build_prediction_workspaces(const std::vector<double>& cons
             params.push_back(constrained_parameters[range.first + i]);
         }
         covariance_parameters[id] = std::move(params);
-    }
-
-    std::cerr << "Verifying linear_predictors..." << std::endl;
-    for(const auto& [k, v] : linear_predictors) {
-        std::cerr << "LP: " << k << " size " << v.size() << std::endl;
-    }
-    std::cerr << "Verifying dispersions..." << std::endl;
-    for(const auto& [k, v] : dispersions) {
-        std::cerr << "Disp: " << k << " size " << v.size() << std::endl;
     }
 }
 

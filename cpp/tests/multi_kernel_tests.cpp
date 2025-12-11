@@ -65,8 +65,10 @@ TEST_CASE("LikelihoodDriver handles multi_kernel covariance", "[likelihood_drive
     
     // Outcome variable LAST
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("re_u", libsemx::VariableKind::Latent);
     
     builder.add_random_effect("re_u", {"group", "id1", "id2"}, "cov_u");
+    builder.add_edge(libsemx::EdgeKind::Regression, "re_u", "y", "fixed_1");
 
     auto model = builder.build();
 
@@ -167,11 +169,13 @@ TEST_CASE("LikelihoodDriver handles multi_kernel_simplex", "[likelihood_driver][
     // Define covariance structure with simplex weights
     builder.add_covariance("cov_u", "multi_kernel_simplex", 2);
 
-    builder.add_variable("id1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("id2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("id1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("id2", libsemx::VariableKind::Exogenous);
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("re_u", libsemx::VariableKind::Latent);
     
     builder.add_random_effect("re_u", {"group", "id1", "id2"}, "cov_u");
+    builder.add_edge(libsemx::EdgeKind::Regression, "re_u", "y", "fixed_1");
 
     auto model = builder.build();
 

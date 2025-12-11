@@ -168,9 +168,9 @@ TEST_CASE("LikelihoodDriver fits simple regression model", "[likelihood_driver]"
 TEST_CASE("Model parameter ordering stays aligned with gradient map", "[likelihood_driver][gradient][parameter_catalog]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("intercept", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("x1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("x2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("intercept", libsemx::VariableKind::Exogenous, "gaussian");
+    builder.add_variable("x1", libsemx::VariableKind::Exogenous, "gaussian");
+    builder.add_variable("x2", libsemx::VariableKind::Exogenous, "gaussian");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_edge(libsemx::EdgeKind::Regression, "intercept", "y", "beta_intercept");
     builder.add_edge(libsemx::EdgeKind::Regression, "x1", "y", "beta_x1");

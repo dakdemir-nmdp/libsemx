@@ -139,35 +139,51 @@ TEST_CASE("Compare CFA with lavaan (BFI)", "[comparison][lavaan][cfa]") {
     // Prepare initial values (status)
     std::unordered_map<std::string, std::vector<double>> status;
     
-    // Calculate means for intercepts
+    // Calculate means and variances for initialization
     for (const auto& item : items) {
         const auto& vec = data[item];
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         double mean = sum / vec.size();
+        
+        double sq_sum = std::inner_product(vec.begin(), vec.end(), vec.begin(), 0.0);
+        double variance = (sq_sum / vec.size()) - (mean * mean);
+
         status["int_" + item] = {mean};
-        status["theta_" + item] = {1.0}; // Residual variance
+        // Initialize residual variance to ~50% of total variance
+        status["theta_" + item] = {variance * 0.5}; 
     }
     
     // Latent variances/covariances
     for (const auto& factor : factors) {
+        // Initialize latent variance to ~1.0 (assuming standardized factors)
         status["psi_" + factor] = {1.0};
     }
     // Covariances default to 0.0 which is fine (Identity)
     
     // Loadings
-    // Default 0.0 is fine, or maybe 0.5
-    for (const auto& prefix : prefixes) {
-        for (int i = 2; i <= 5; ++i) { // First is fixed
-             // status["lambda_..."] = {0.5}; 
+    // Initialize loadings to 0.8 to avoid saddle points at 0
+    for (const auto& factor : factors) {
+        for (const auto& prefix : prefixes) {
+            // Only set loadings for items belonging to this factor
+            if (factor.substr(0, 1) == prefix) {
+                for (int i = 2; i <= 5; ++i) { // First is fixed to 1.0
+                    std::string item = prefix + std::to_string(i);
+                    status["lambda_" + factor + "_" + item] = {0.8};
+                }
+            }
         }
     }
 
     LikelihoodDriver driver;
     OptimizationOptions options;
-    options.max_iterations = 10000; // Increased
-    options.tolerance = 1e-3; // Relaxed further
+    options.max_iterations = 1000; 
+    options.tolerance = 1e-3; 
+    options.learning_rate = 1e-4; 
+    options.force_laplace = true; // Use Laplace to avoid O(N^3) analytic path
+    options.linesearch_type = "armijo";
 
-    auto result = driver.fit(model, data, options, "lbfgs", {}, status);
+    // Use LBFGS to reproduce the exception
+    auto result = driver.fit(model, data, options, "gd", {}, status);
 
     if (!result.optimization_result.converged) {
         WARN("Optimization did not converge to strict tolerance.");

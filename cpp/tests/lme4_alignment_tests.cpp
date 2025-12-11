@@ -93,7 +93,9 @@ TEST_CASE("Align with lme4 results for sleepstudy data", "[alignment][lme4]") {
     
     // Random effect definition
     // Variables: Subject (grouping), _intercept (random intercept), Days (random slope)
+    builder.add_variable("subject_re", VariableKind::Latent);
     builder.add_random_effect("subject_re", {"Subject", "_intercept", "Days"}, "re_cov");
+    builder.add_edge(EdgeKind::Regression, "subject_re", "Reaction", "1.0");
 
     auto model = builder.build();
 
@@ -207,7 +209,9 @@ TEST_CASE("Align with lme4 results for sleepstudy data (Binomial)", "[alignment]
     
     // Random effect definition
     // Variables: Subject (grouping), _intercept (random intercept)
+    builder.add_variable("subject_re", VariableKind::Latent);
     builder.add_random_effect("subject_re", {"Subject", "_intercept"}, "re_cov");
+    builder.add_edge(EdgeKind::Regression, "subject_re", "ReactionBin", "1.0");
 
     auto model = builder.build();
 
