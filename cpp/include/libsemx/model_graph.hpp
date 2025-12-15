@@ -19,7 +19,7 @@ public:
 
     void add_covariance(std::string id, std::string structure, std::size_t dimension, std::vector<std::string> component_ids = {});
 
-    void add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id);
+    void add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id, double lambda = 1.0);
 
     void register_parameter(std::string id,
                             ParameterConstraint constraint = ParameterConstraint::Free,

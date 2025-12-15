@@ -16,12 +16,16 @@ from ._libsemx import (
     VariableSpec,
     EdgeSpec,
     GenomicRelationshipMatrix,
+    MoMSolver,
+    MoMSolverOptions,
+    MoMSolverResult,
 )
 
 from .model import Model, ModelSpecificationError, SemFit
 from .gxe import gxe_model
 from .genomic import extract_heritability, cv_genomic_prediction
 from .survival import predict_survival, predict_cif
+from .crossed import crossed_model, MoMFit
 
 __all__ = [
     "__version__",
@@ -33,6 +37,8 @@ __all__ = [
     "cv_genomic_prediction",
     "predict_survival",
     "predict_cif",
+    "crossed_model",
+    "MoMFit",
     "ModelIR",
     "ModelIRBuilder",
     "VariableKind",
@@ -44,6 +50,9 @@ __all__ = [
     "FitResult",
     "VariableSpec",
     "EdgeSpec",
+    "MoMSolver",
+    "MoMSolverOptions",
+    "MoMSolverResult",
 ]
 
 __version__ = "0.0.0.dev0"

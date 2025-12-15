@@ -4,6 +4,7 @@
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/optimizer.hpp"
 #include "libsemx/post_estimation.hpp"
+#include "libsemx/mom_solver.hpp"
 
 using namespace Rcpp;
 
@@ -233,6 +234,74 @@ Rcpp::NumericMatrix grm_kronecker_cpp(const Rcpp::NumericMatrix& left,
 
 } // namespace
 
+// Method of Moments Solver wrapper (outside anonymous namespace for Rcpp::as to work)
+Rcpp::List mom_solver_fit_wrapper(
+    Rcpp::NumericVector y_r,
+    Rcpp::NumericMatrix X_r,
+    Rcpp::IntegerVector u_indices_r,
+    Rcpp::IntegerVector v_indices_r,
+    bool use_gls,
+    bool second_step,
+    bool verbose,
+    double min_variance) {
+    // Convert Rcpp types to Eigen (manual conversion to avoid template issues)
+    const int n = y_r.size();
+    const int p = X_r.ncol();
+
+    Eigen::VectorXd y(n);
+    for (int i = 0; i < n; ++i) {
+        y(i) = y_r[i];
+    }
+
+    Eigen::MatrixXd X(n, p);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < p; ++j) {
+            X(i, j) = X_r(i, j);
+        }
+    }
+
+    // Convert Rcpp::IntegerVector to std::vector<size_t>
+    std::vector<size_t> u_indices(u_indices_r.size());
+    std::vector<size_t> v_indices(v_indices_r.size());
+
+    for (int i = 0; i < u_indices_r.size(); ++i) {
+        u_indices[i] = static_cast<size_t>(u_indices_r[i]);
+    }
+    for (int i = 0; i < v_indices_r.size(); ++i) {
+        v_indices[i] = static_cast<size_t>(v_indices_r[i]);
+    }
+
+    // Set up options
+    libsemx::MoMSolver::Options options;
+    options.use_gls = use_gls;
+    options.second_step = second_step;
+    options.verbose = verbose;
+    options.min_variance = min_variance;
+
+    // Fit model
+    auto result = libsemx::MoMSolver::fit(y, X, u_indices, v_indices, options);
+
+    // Convert result to Rcpp::List (manually convert Eigen types to avoid linking issues)
+    Rcpp::NumericVector beta_r(result.beta.size());
+    for (int i = 0; i < result.beta.size(); ++i) {
+        beta_r[i] = result.beta(i);
+    }
+
+    Rcpp::NumericVector variance_components_r(result.variance_components.size());
+    for (int i = 0; i < result.variance_components.size(); ++i) {
+        variance_components_r[i] = result.variance_components(i);
+    }
+
+    return Rcpp::List::create(
+        Rcpp::Named("beta") = beta_r,
+        Rcpp::Named("variance_components") = variance_components_r,
+        Rcpp::Named("n_groups_u") = static_cast<int>(result.n_groups_u),
+        Rcpp::Named("n_groups_v") = static_cast<int>(result.n_groups_v),
+        Rcpp::Named("converged") = result.converged,
+        Rcpp::Named("message") = result.message
+    );
+}
+
 // Wrapper for ModelIRBuilder::add_variable
 void ModelIRBuilder_add_variable(ModelIRBuilder* builder, std::string name, int kind, std::string family, std::string label, std::string measurement_level) {
     builder->add_variable(name, static_cast<VariableKind>(kind), family, label, measurement_level);
@@ -313,7 +382,9 @@ FitResult LikelihoodDriver_fit(LikelihoodDriver* driver,
                                         int method) {
     auto data_map = list_to_map(data);
     auto extra_map = list_to_string_vector_map(extra_param_mappings);
-    return driver->fit(*model, data_map, *options, optimizer_name, {}, {}, static_cast<EstimationMethod>(method), extra_map);
+    OptimizationOptions default_opts;
+    OptimizationOptions& opts_ref = options ? *options : default_opts;
+    return driver->fit(*model, data_map, opts_ref, optimizer_name, {}, {}, static_cast<EstimationMethod>(method), extra_map);
 }
 
 FitResult LikelihoodDriver_fit_with_fixed(LikelihoodDriver* driver,
@@ -324,9 +395,11 @@ FitResult LikelihoodDriver_fit_with_fixed(LikelihoodDriver* driver,
                                                    Rcpp::Nullable<Rcpp::List> fixed_covariance_data,
                                                    Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                                    int method) {
+    OptimizationOptions default_opts;
+    OptimizationOptions& opts_ref = options ? *options : default_opts;
     return driver->fit(*model,
                        list_to_map(data),
-                       *options,
+                       opts_ref,
                        optimizer_name,
                        list_to_matrix_map(fixed_covariance_data),
                        {},
@@ -342,7 +415,9 @@ FitResult LikelihoodDriver_fit_with_status(LikelihoodDriver* driver,
                                         Rcpp::List status,
                                         Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                         int method) {
-    return driver->fit(*model, list_to_map(data), *options, optimizer_name, {}, list_to_map(status), static_cast<EstimationMethod>(method), list_to_string_vector_map(extra_param_mappings));
+    OptimizationOptions default_opts;
+    OptimizationOptions& opts_ref = options ? *options : default_opts;
+    return driver->fit(*model, list_to_map(data), opts_ref, optimizer_name, {}, list_to_map(status), static_cast<EstimationMethod>(method), list_to_string_vector_map(extra_param_mappings));
 }
 
 FitResult LikelihoodDriver_fit_with_fixed_and_status(LikelihoodDriver* driver,
@@ -354,9 +429,11 @@ FitResult LikelihoodDriver_fit_with_fixed_and_status(LikelihoodDriver* driver,
                                                    Rcpp::List status,
                                                    Rcpp::Nullable<Rcpp::List> extra_param_mappings,
                                                    int method) {
+    OptimizationOptions default_opts;
+    OptimizationOptions& opts_ref = options ? *options : default_opts;
     return driver->fit(*model,
                        list_to_map(data),
-                       *options,
+                       opts_ref,
                        optimizer_name,
                        list_to_matrix_map(fixed_covariance_data),
                        list_to_map(status),
@@ -369,7 +446,9 @@ FitResult LikelihoodDriver_fit_simple(LikelihoodDriver* driver,
                                         Rcpp::List data,
                                         OptimizationOptions* options,
                                         std::string optimizer_name) {
-    return driver->fit(*model, list_to_map(data), *options, optimizer_name, {}, {}, EstimationMethod::ML, {});
+    OptimizationOptions default_opts;
+    OptimizationOptions& opts_ref = options ? *options : default_opts;
+    return driver->fit(*model, list_to_map(data), opts_ref, optimizer_name, {}, {}, EstimationMethod::ML, {});
 }
 
 FitResult LikelihoodDriver_fit_with_fixed_simple(LikelihoodDriver* driver,
@@ -378,9 +457,11 @@ FitResult LikelihoodDriver_fit_with_fixed_simple(LikelihoodDriver* driver,
                                                    OptimizationOptions* options,
                                                    std::string optimizer_name,
                                                    Rcpp::Nullable<Rcpp::List> fixed_covariance_data) {
+    OptimizationOptions default_opts;
+    OptimizationOptions& opts_ref = options ? *options : default_opts;
     return driver->fit(*model,
                        list_to_map(data),
-                       *options,
+                       opts_ref,
                        optimizer_name,
                        list_to_matrix_map(fixed_covariance_data),
                        {},
@@ -622,6 +703,14 @@ void ModelIRBuilder_add_covariance(ModelIRBuilder* builder, std::string id, std:
     builder->add_covariance(id, structure, dimension, comps);
 }
 
+void ModelIRBuilder_add_random_effect(ModelIRBuilder* builder, std::string id, Rcpp::StringVector variables, std::string covariance_id, double lambda = 1.0) {
+    std::vector<std::string> vars;
+    for(int i=0; i<variables.size(); ++i) {
+        vars.push_back(Rcpp::as<std::string>(variables[i]));
+    }
+    builder->add_random_effect(id, vars, covariance_id, lambda);
+}
+
 RCPP_MODULE(semx) {
     class_<ModelIR>("ModelIR")
         .method("parameter_ids", &ModelIR_parameter_ids)
@@ -634,7 +723,7 @@ RCPP_MODULE(semx) {
         .method("add_variable", &ModelIRBuilder_add_variable)
         .method("add_edge", &ModelIRBuilder_add_edge)
         .method("add_covariance", &ModelIRBuilder_add_covariance)
-        .method("add_random_effect", &ModelIRBuilder::add_random_effect)
+        .method("add_random_effect", &ModelIRBuilder_add_random_effect)
         .method("register_parameter", &ModelIRBuilder::register_parameter)
         .method("set_parameter_initial_value", &ModelIRBuilder::set_parameter_initial_value)
         .method("build", &ModelIRBuilder_build)
@@ -698,4 +787,7 @@ RCPP_MODULE(semx) {
     function("compute_standardized_estimates_wrapper", &compute_standardized_estimates_wrapper);
     function("compute_model_diagnostics_wrapper", &compute_model_diagnostics_wrapper);
     function("compute_modification_indices_wrapper", &compute_modification_indices_wrapper);
+
+    // Method of Moments Solver
+    function("mom_solver_fit", &mom_solver_fit_wrapper);
 }

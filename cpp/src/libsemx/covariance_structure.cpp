@@ -630,6 +630,244 @@ std::vector<std::vector<double>> FactorAnalyticCovariance::parameter_gradients(
     return grads;
 }
 
+// ARMA(1,1) Covariance
+ARMA11Covariance::ARMA11Covariance(std::size_t dimension)
+    : CovarianceStructure(dimension, dimension > 1 ? 3 : 1) {}
+
+void ARMA11Covariance::fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const {
+    const std::size_t dim = dimension();
+    const double variance = parameters[0];
+
+    if (parameter_count() == 1) {
+        // Degenerate case: dimension = 1
+        matrix[0] = variance;
+        return;
+    }
+
+    const double rho = transform_to_correlation(parameters[1]);
+    const double lambda = transform_to_correlation(parameters[2]);
+
+    for (std::size_t i = 0; i < dim; ++i) {
+        for (std::size_t j = 0; j < dim; ++j) {
+            const std::size_t dist = (i > j) ? (i - j) : (j - i);
+            double value;
+            if (dist == 0) {
+                value = variance;
+            } else if (dist == 1) {
+                value = variance * lambda;
+            } else {
+                // dist > 1: variance * lambda * rho^(dist-1)
+                // This matches the SAMM implementation where farther lags decay
+                value = variance * lambda * std::pow(rho, static_cast<double>(dist - 1));
+            }
+            matrix[i * dim + j] = value;
+        }
+    }
+}
+
+void ARMA11Covariance::validate_parameters(const std::vector<double>& parameters) const {
+    CovarianceStructure::validate_parameters(parameters);
+    if (!(parameters[0] > 0.0)) {
+        throw std::invalid_argument("ARMA(1,1) variance must be positive");
+    }
+}
+
+std::vector<std::vector<double>> ARMA11Covariance::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    const std::size_t dim = dimension();
+    const std::size_t pc = parameter_count();
+    std::vector<std::vector<double>> grads(pc, std::vector<double>(dim * dim, 0.0));
+
+    if (pc == 1) {
+        grads[0][0] = 1.0;
+        return grads;
+    }
+
+    const double variance = parameters[0];
+    const double rho = transform_to_correlation(parameters[1]);
+    const double lambda = transform_to_correlation(parameters[2]);
+    const double drho = transform_to_correlation_derivative(parameters[1]);
+    const double dlambda = transform_to_correlation_derivative(parameters[2]);
+
+    for (std::size_t i = 0; i < dim; ++i) {
+        for (std::size_t j = 0; j < dim; ++j) {
+            const std::size_t dist = (i > j) ? (i - j) : (j - i);
+            const std::size_t idx = i * dim + j;
+
+            if (dist == 0) {
+                grads[0][idx] = 1.0;
+                grads[1][idx] = 0.0;
+                grads[2][idx] = 0.0;
+            } else if (dist == 1) {
+                grads[0][idx] = lambda;
+                grads[1][idx] = 0.0;
+                grads[2][idx] = variance * dlambda;
+            } else {
+                // dist > 1: variance * lambda * rho^(dist-1)
+                const double rho_power = std::pow(rho, static_cast<double>(dist - 1));
+                grads[0][idx] = lambda * rho_power;
+                grads[1][idx] = variance * lambda * (dist - 1) * std::pow(rho, static_cast<double>(dist - 2)) * drho;
+                grads[2][idx] = variance * rho_power * dlambda;
+            }
+        }
+    }
+
+    return grads;
+}
+
+// RBF (Radial Basis Function / Gaussian) Kernel
+RBFKernel::RBFKernel(const std::vector<double>& coordinates, std::size_t dimension)
+    : CovarianceStructure(dimension, 2),  // Parameters: [variance, lengthscale]
+      coordinates_(coordinates) {
+    if (coordinates.empty()) {
+        throw std::invalid_argument("RBF kernel requires coordinate data");
+    }
+    precompute_distances();
+}
+
+void RBFKernel::precompute_distances() {
+    const std::size_t n = dimension();
+    const std::size_t d = coordinates_.size() / n;  // Number of spatial dimensions
+
+    distance_matrix_.resize(n * n);
+
+    // Compute pairwise Euclidean distances
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            double dist_sq = 0.0;
+            for (std::size_t k = 0; k < d; ++k) {
+                const double diff = coordinates_[i * d + k] - coordinates_[j * d + k];
+                dist_sq += diff * diff;
+            }
+            distance_matrix_[i * n + j] = std::sqrt(dist_sq);
+        }
+    }
+}
+
+void RBFKernel::fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const {
+    const std::size_t n = dimension();
+    const double variance = parameters[0];
+    const double inv_lengthscale = std::exp(parameters[1]);  // Transform to ensure positive
+
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            const double dist = distance_matrix_[i * n + j];
+            const double kernel_value = std::exp(-inv_lengthscale * dist * dist);
+            matrix[i * n + j] = variance * kernel_value;
+        }
+    }
+}
+
+void RBFKernel::validate_parameters(const std::vector<double>& parameters) const {
+    CovarianceStructure::validate_parameters(parameters);
+    if (!(parameters[0] > 0.0)) {
+        throw std::invalid_argument("RBF kernel variance must be positive");
+    }
+}
+
+std::vector<std::vector<double>> RBFKernel::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    const std::size_t n = dimension();
+    std::vector<std::vector<double>> grads(2, std::vector<double>(n * n, 0.0));
+
+    const double variance = parameters[0];
+    const double inv_lengthscale = std::exp(parameters[1]);
+
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            const double dist = distance_matrix_[i * n + j];
+            const double dist_sq = dist * dist;
+            const double kernel_value = std::exp(-inv_lengthscale * dist_sq);
+
+            // Gradient w.r.t. variance
+            grads[0][i * n + j] = kernel_value;
+
+            // Gradient w.r.t. log(inv_lengthscale)
+            // d/d(log ℓ) exp(-ℓ * d²) = -ℓ * d² * exp(-ℓ * d²) * ℓ = -ℓ² * d² * exp(-ℓ * d²)
+            // But parameter is log(ℓ), so chain rule gives: -ℓ * d² * exp(-ℓ * d²)
+            grads[1][i * n + j] = -variance * inv_lengthscale * dist_sq * kernel_value;
+        }
+    }
+
+    return grads;
+}
+
+// Exponential Kernel
+ExponentialKernel::ExponentialKernel(const std::vector<double>& coordinates, std::size_t dimension)
+    : CovarianceStructure(dimension, 2),  // Parameters: [variance, lengthscale]
+      coordinates_(coordinates) {
+    if (coordinates.empty()) {
+        throw std::invalid_argument("Exponential kernel requires coordinate data");
+    }
+    precompute_distances();
+}
+
+void ExponentialKernel::precompute_distances() {
+    const std::size_t n = dimension();
+    const std::size_t d = coordinates_.size() / n;  // Number of spatial dimensions
+
+    distance_matrix_.resize(n * n);
+
+    // Compute pairwise Euclidean distances
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            double dist_sq = 0.0;
+            for (std::size_t k = 0; k < d; ++k) {
+                const double diff = coordinates_[i * d + k] - coordinates_[j * d + k];
+                dist_sq += diff * diff;
+            }
+            distance_matrix_[i * n + j] = std::sqrt(dist_sq);
+        }
+    }
+}
+
+void ExponentialKernel::fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const {
+    const std::size_t n = dimension();
+    const double variance = parameters[0];
+    const double inv_lengthscale = std::exp(parameters[1]);  // Transform to ensure positive
+
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            const double dist = distance_matrix_[i * n + j];
+            const double kernel_value = std::exp(-inv_lengthscale * dist);
+            matrix[i * n + j] = variance * kernel_value;
+        }
+    }
+}
+
+void ExponentialKernel::validate_parameters(const std::vector<double>& parameters) const {
+    CovarianceStructure::validate_parameters(parameters);
+    if (!(parameters[0] > 0.0)) {
+        throw std::invalid_argument("Exponential kernel variance must be positive");
+    }
+}
+
+std::vector<std::vector<double>> ExponentialKernel::parameter_gradients(const std::vector<double>& parameters) const {
+    validate_parameters(parameters);
+    const std::size_t n = dimension();
+    std::vector<std::vector<double>> grads(2, std::vector<double>(n * n, 0.0));
+
+    const double variance = parameters[0];
+    const double inv_lengthscale = std::exp(parameters[1]);
+
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            const double dist = distance_matrix_[i * n + j];
+            const double kernel_value = std::exp(-inv_lengthscale * dist);
+
+            // Gradient w.r.t. variance
+            grads[0][i * n + j] = kernel_value;
+
+            // Gradient w.r.t. log(inv_lengthscale)
+            // d/d(log ℓ) exp(-ℓ * d) = -ℓ * d * exp(-ℓ * d) * ℓ = -ℓ² * d * exp(-ℓ * d)
+            // But parameter is log(ℓ), so chain rule gives: -ℓ * d * exp(-ℓ * d)
+            grads[1][i * n + j] = -variance * inv_lengthscale * dist * kernel_value;
+        }
+    }
+
+    return grads;
+}
+
 
 std::unique_ptr<CovarianceStructure> create_covariance_structure(
     const CovarianceSpec& spec,
@@ -693,8 +931,22 @@ std::unique_ptr<CovarianceStructure> create_covariance_structure(
         return std::make_unique<CompoundSymmetryCovariance>(spec.dimension);
     } else if (normalized == "ar1") {
         return std::make_unique<AR1Covariance>(spec.dimension);
+    } else if (normalized == "arma11" || normalized == "arma_1_1") {
+        return std::make_unique<ARMA11Covariance>(spec.dimension);
     } else if (normalized == "toeplitz") {
         return std::make_unique<ToeplitzCovariance>(spec.dimension);
+    } else if (normalized == "rbf" || normalized == "gaussian_kernel") {
+        auto fixed_it = fixed_covariance_data.find(spec.id);
+        if (fixed_it == fixed_covariance_data.end() || fixed_it->second.empty()) {
+            throw std::runtime_error("Missing coordinate data for RBF kernel: " + spec.id);
+        }
+        return std::make_unique<RBFKernel>(fixed_it->second.front(), spec.dimension);
+    } else if (normalized == "exponential" || normalized == "exponential_kernel") {
+        auto fixed_it = fixed_covariance_data.find(spec.id);
+        if (fixed_it == fixed_covariance_data.end() || fixed_it->second.empty()) {
+            throw std::runtime_error("Missing coordinate data for Exponential kernel: " + spec.id);
+        }
+        return std::make_unique<ExponentialKernel>(fixed_it->second.front(), spec.dimension);
     } else if (auto rank = parse_factor_rank(normalized)) {
         if (*rank >= spec.dimension || *rank == 0) {
             throw std::runtime_error("Factor-analytic rank must satisfy 0 < rank < dimension for covariance: " + spec.id);

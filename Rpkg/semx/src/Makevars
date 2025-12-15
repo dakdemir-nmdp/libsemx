@@ -29,6 +29,10 @@ SOURCES = model_graph.cpp \
           likelihood_driver.cpp \
           model_objective.cpp \
           outcome_family_factory.cpp \
-          post_estimation.cpp
+          post_estimation.cpp \
+          spectral_likelihood_evaluator.cpp \
+          multivariate_spectral_likelihood_evaluator.cpp \
+          average_information_optimizer.cpp \
+          mom_solver.cpp
 
 OBJECTS = r_bindings.o RcppExports.o $(SOURCES:.cpp=.o)

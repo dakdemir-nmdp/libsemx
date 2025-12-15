@@ -51,6 +51,7 @@ struct RandomEffectSpec {
     std::string id;
     std::vector<std::string> variables;
     std::string covariance_id;
+    double lambda{1.0};  // Shrinkage/ridge parameter (1.0 = no shrinkage, >1 = more shrinkage)
 };
 
 struct ParameterSpec {

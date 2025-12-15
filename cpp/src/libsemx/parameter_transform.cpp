@@ -41,6 +41,36 @@ double LogTransform::constrained_derivative(double unconstrained) const noexcept
     return std::exp(unconstrained);
 }
 
+BoundedLogTransform::BoundedLogTransform(double min_value)
+    : min_value_(min_value) {
+    if (!(min_value_ >= 0.0)) {
+        throw std::invalid_argument("bounded log transform requires non-negative minimum");
+    }
+}
+
+double BoundedLogTransform::to_constrained(double unconstrained) const {
+    return min_value_ + std::exp(unconstrained);
+}
+
+double BoundedLogTransform::to_unconstrained(double constrained) const {
+    if (constrained <= min_value_) {
+        throw std::domain_error("bounded log transform input must be greater than minimum");
+    }
+    return std::log(constrained - min_value_);
+}
+
+bool BoundedLogTransform::is_valid_constrained(double constrained) const noexcept {
+    return constrained > min_value_;
+}
+
+double BoundedLogTransform::constrained_derivative(double unconstrained) const noexcept {
+    return std::exp(unconstrained);
+}
+
+double BoundedLogTransform::min_value() const noexcept {
+    return min_value_;
+}
+
 LogisticTransform::LogisticTransform(double lower_bound, double upper_bound)
     : lower_(lower_bound), upper_(upper_bound) {
     if (!(upper_ > lower_)) {
@@ -89,6 +119,10 @@ std::shared_ptr<const ParameterTransform> make_identity_transform() {
 std::shared_ptr<const ParameterTransform> make_log_transform() {
     static const std::shared_ptr<const ParameterTransform> kLog = std::make_shared<LogTransform>();
     return kLog;
+}
+
+std::shared_ptr<const ParameterTransform> make_bounded_log_transform(double min_value) {
+    return std::make_shared<BoundedLogTransform>(min_value);
 }
 
 std::shared_ptr<const ParameterTransform> make_logistic_transform(double lower_bound, double upper_bound) {

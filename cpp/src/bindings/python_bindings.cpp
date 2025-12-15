@@ -1,10 +1,12 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/eigen.h>
 #include "libsemx/genomic_kernel.hpp"
 #include "libsemx/model_ir.hpp"
 #include "libsemx/likelihood_driver.hpp"
 #include "libsemx/optimizer.hpp"
 #include "libsemx/post_estimation.hpp"
+#include "libsemx/mom_solver.hpp"
 
 namespace py = pybind11;
 using namespace libsemx;
@@ -144,7 +146,8 @@ PYBIND11_MODULE(_libsemx, m) {
         .def(py::init<>())
         .def_readwrite("id", &RandomEffectSpec::id)
         .def_readwrite("variables", &RandomEffectSpec::variables)
-        .def_readwrite("covariance_id", &RandomEffectSpec::covariance_id);
+        .def_readwrite("covariance_id", &RandomEffectSpec::covariance_id)
+        .def_readwrite("lambda", &RandomEffectSpec::lambda);
 
     py::class_<ParameterSpec>(m, "ParameterSpec")
         .def(py::init<>())
@@ -167,7 +170,8 @@ PYBIND11_MODULE(_libsemx, m) {
         .def("add_edge", &ModelIRBuilder::add_edge)
         .def("add_covariance", &ModelIRBuilder::add_covariance,
              py::arg("id"), py::arg("structure"), py::arg("dimension"), py::arg("component_ids") = std::vector<std::string>{})
-        .def("add_random_effect", &ModelIRBuilder::add_random_effect)
+        .def("add_random_effect", &ModelIRBuilder::add_random_effect,
+             py::arg("id"), py::arg("variables"), py::arg("covariance_id"), py::arg("lambda") = 1.0)
         .def("register_parameter", &ModelIRBuilder::register_parameter, py::arg("id"), py::arg("initial_value") = 0.0)
         .def("build", &ModelIRBuilder::build);
 
@@ -243,4 +247,60 @@ PYBIND11_MODULE(_libsemx, m) {
                     py::arg("left_dim"),
                     py::arg("right"),
                     py::arg("right_dim"));
+
+    // Method of Moments Solver for crossed random effects
+    py::class_<MoMSolver::Options>(m, "MoMSolverOptions")
+        .def(py::init<>())
+        .def_readwrite("use_gls", &MoMSolver::Options::use_gls)
+        .def_readwrite("second_step", &MoMSolver::Options::second_step)
+        .def_readwrite("verbose", &MoMSolver::Options::verbose)
+        .def_readwrite("min_variance", &MoMSolver::Options::min_variance);
+
+    py::class_<MoMSolver::Result>(m, "MoMSolverResult")
+        .def(py::init<>())
+        .def_readwrite("beta", &MoMSolver::Result::beta)
+        .def_readwrite("variance_components", &MoMSolver::Result::variance_components)
+        .def_readwrite("n_groups_u", &MoMSolver::Result::n_groups_u)
+        .def_readwrite("n_groups_v", &MoMSolver::Result::n_groups_v)
+        .def_readwrite("converged", &MoMSolver::Result::converged)
+        .def_readwrite("message", &MoMSolver::Result::message);
+
+    py::class_<MoMSolver>(m, "MoMSolver")
+        .def_static("fit",
+                    &MoMSolver::fit,
+                    py::arg("y"),
+                    py::arg("X"),
+                    py::arg("u_indices"),
+                    py::arg("v_indices"),
+                    py::arg("options") = MoMSolver::Options(),
+                    R"pbdoc(
+        Fit a linear mixed model with two crossed random effects using Method of Moments.
+
+        Model: y = Xβ + Z_u u + Z_v v + e
+               where u ~ N(0, σ²_u I), v ~ N(0, σ²_v I), e ~ N(0, σ²_e I)
+
+        Parameters
+        ----------
+        y : numpy.ndarray
+            Response vector (n,)
+        X : numpy.ndarray
+            Fixed effects design matrix (n, p)
+        u_indices : list of int
+            Group indices for first random effect, values in [0, n_u-1]
+        v_indices : list of int
+            Group indices for second random effect, values in [0, n_v-1]
+        options : MoMSolverOptions, optional
+            Solver options
+
+        Returns
+        -------
+        MoMSolverResult
+            Result containing β and variance component estimates [σ²_u, σ²_v, σ²_e]
+
+        Notes
+        -----
+        This is a fast O(N) non-iterative method based on Gao & Owen (2017/2018).
+        Ideal for very large-scale crossed random effects models where iterative
+        methods like AI or EM are too slow.
+        )pbdoc");
 }

@@ -73,76 +73,6 @@ class SemFit:
         self.sample_stats = sample_stats or {}
         self.data = data
 
-    def predict(self, newdata: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-        """
-        Predict values for endogenous variables (linear predictor).
-        
-        Args:
-            newdata: Optional DataFrame. If None, uses original data.
-            
-        Returns:
-            DataFrame with predictions.
-        """
-        if isinstance(self.model_ir, list):
-            # Multi-group prediction
-            if newdata is not None:
-                raise NotImplementedError("Prediction with new data not yet supported for multi-group models")
-            
-            # If using original data (which should be a list of DataFrames)
-            if self.data is None or not isinstance(self.data, list):
-                 raise ValueError("No data available for prediction.")
-            
-            predictions = []
-            for i, (ir, df) in enumerate(zip(self.model_ir, self.data)):
-                # Logic similar to single group, but using group-specific parameters?
-                # We need to extract parameters for this group.
-                # fit_result.parameters is a flat vector.
-                # We need to map parameter names to values.
-                # Parameter names in IR should match names in fit_result.
-                # So we can just use the full parameter vector.
-                
-                # ... (duplicate logic or extract helper)
-                # For now, let's just raise NotImplementedError to be safe
-                pass
-            raise NotImplementedError("Prediction not yet supported for multi-group models")
-
-        data = newdata if newdata is not None else self.data
-        if data is None:
-            raise ValueError("No data available for prediction.")
-            
-        # Ensure intercept
-        # We need to know if model uses intercept. 
-        # Currently ModelIR doesn't expose uses_intercept_column directly as a property?
-        # But we can check if "_intercept" is in variables.
-        uses_intercept = any(v.name == "_intercept" for v in self.model_ir.variables)
-        
-        if uses_intercept and "_intercept" not in data.columns:
-            data = data.copy()
-            data["_intercept"] = 1.0
-            
-        params = self.parameter_estimates
-        preds = {}
-        
-        # Identify endogenous variables (targets of regressions)
-        targets = set()
-        for edge in self.model_ir.edges:
-            if edge.kind == EdgeKind.Regression:
-                targets.add(edge.target)
-                
-        for target in targets:
-            # Find predictors
-            relevant_edges = [e for e in self.model_ir.edges if e.kind == EdgeKind.Regression and e.target == target]
-            
-            y_hat = np.zeros(len(data))
-            for edge in relevant_edges:
-                val = params.get(edge.parameter_id, 0.0)
-                if edge.source in data.columns:
-                    y_hat += val * data[edge.source].values
-                
-            preds[target] = y_hat
-            
-        return pd.DataFrame(preds)
-
     @property
     def optimization_result(self) -> Any:
         return self.fit_result.optimization_result
@@ -371,40 +301,72 @@ class SemFit:
         """Return a summary object containing fit statistics and parameter estimates."""
         return SemFitSummary(self)
 
-    def predict(
-        self, data: Union[Mapping[str, Sequence[float]], pd.DataFrame]
+    def _predict_single_group(
+        self,
+        ir: ModelIR,
+        data: Union[Mapping[str, Sequence[float]], pd.DataFrame],
+        params: Dict[str, float],
     ) -> pd.DataFrame:
-        """Generate predictions for the given data (marginal)."""
+        """Internal helper to generate predictions for one group."""
         if hasattr(data, "to_dict"):
             df = pd.DataFrame(data.to_dict())
         else:
             df = pd.DataFrame(data)
 
-        if "_intercept" not in df.columns:
+        uses_intercept = any(v.name == "_intercept" for v in ir.variables)
+        if uses_intercept and "_intercept" not in df.columns:
+            df = df.copy()
             df["_intercept"] = 1.0
 
-        params = self.parameter_estimates
-        predictions = {}
-
-        # Identify endogenous variables (targets of regressions)
-        targets = set()
-        for edge in self.model_ir.edges:
-            if edge.kind == EdgeKind.Regression:
-                targets.add(edge.target)
+        predictions: Dict[str, np.ndarray] = {}
+        targets = {edge.target for edge in ir.edges if edge.kind == EdgeKind.Regression}
 
         for target in targets:
             pred = np.zeros(len(df))
             has_predictors = False
-            for edge in self.model_ir.edges:
-                if edge.kind == EdgeKind.Regression and edge.target == target:
-                    if edge.source in df.columns:
-                        val = params.get(edge.parameter_id, 0.0)
-                        pred += val * df[edge.source]
-                        has_predictors = True
+            for edge in ir.edges:
+                if edge.kind == EdgeKind.Regression and edge.target == target and edge.source in df.columns:
+                    val = params.get(edge.parameter_id, 0.0)
+                    pred += val * df[edge.source].to_numpy()
+                    has_predictors = True
             if has_predictors:
                 predictions[target] = pred
 
         return pd.DataFrame(predictions)
+
+    def predict(
+        self,
+        data: Optional[
+            Union[
+                Mapping[str, Sequence[float]],
+                pd.DataFrame,
+                Sequence[Union[Mapping[str, Sequence[float]], pd.DataFrame]],
+            ]
+        ] = None,
+    ) -> Union[pd.DataFrame, List[pd.DataFrame]]:
+        """
+        Generate predictions for the given data (marginal).
+
+        Returns a DataFrame for single-group fits, or a list of DataFrames
+        (one per group, in the order of the fitted models) for multi-group fits.
+        """
+        params = self.parameter_estimates
+
+        if isinstance(self.model_ir, list):
+            datasets = data if data is not None else self.data
+            if datasets is None:
+                raise ValueError("No data available for multi-group prediction.")
+            if not isinstance(datasets, list):
+                raise ValueError("Provide a list of datasets (one per group) for multi-group prediction.")
+            if len(datasets) != len(self.model_ir):
+                raise ValueError(f"Multi-group prediction expects {len(self.model_ir)} datasets, got {len(datasets)}.")
+            return [self._predict_single_group(ir, ds, params) for ir, ds in zip(self.model_ir, datasets)]
+
+        dataset = data if data is not None else self.data
+        if dataset is None:
+            raise ValueError("No data available for prediction.")
+
+        return self._predict_single_group(self.model_ir, dataset, params)
 
     def plot(
         self,
@@ -441,6 +403,8 @@ class SemFit:
             fig, ax = plt.subplots()
 
         preds = self.predict(data)
+        if isinstance(preds, list):
+            raise ValueError("Plotting is only supported for single-group predictions.")
         if hasattr(data, "to_dict"):
             df = pd.DataFrame(data.to_dict())
         else:

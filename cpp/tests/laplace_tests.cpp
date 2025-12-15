@@ -132,10 +132,15 @@ TEST_CASE("LikelihoodDriver evaluates Laplace for Poisson GLMM", "[laplace][pois
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "poisson");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    
+    // Add random effect as a latent variable so we can draw edges from it
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
+
     // Random intercept: u ~ N(0, tau^2)
     builder.add_covariance("tau_sq", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+
+    // Connect random effect to outcome
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "one");
 
     auto model = builder.build();
 
@@ -177,10 +182,15 @@ TEST_CASE("LikelihoodDriver evaluates Laplace for Negative Binomial GLMM", "[lap
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "negative_binomial");
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    
+    // Add random effect as a latent variable so we can draw edges from it
+    builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
+
     // Random intercept: u ~ N(0, tau^2)
     builder.add_covariance("tau_sq", "diagonal", 1);
     builder.add_random_effect("u_cluster", {"cluster"}, "tau_sq");
+
+    // Connect random effect to outcome
+    builder.add_edge(libsemx::EdgeKind::Regression, "u_cluster", "y", "one");
 
     auto model = builder.build();
 

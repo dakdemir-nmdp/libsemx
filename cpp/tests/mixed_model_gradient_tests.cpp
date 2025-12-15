@@ -286,7 +286,7 @@ TEST_CASE("LikelihoodDriver analytic gradients handle crossed grouping factors",
 TEST_CASE("LikelihoodDriver Laplace gradients match finite differences", "[gradient][laplace]") {
     ModelIRBuilder builder;
     builder.add_variable("y", VariableKind::Observed, "binomial");
-    builder.add_variable("x", VariableKind::Latent);
+    builder.add_variable("x", VariableKind::Exogenous);
     builder.add_variable("cluster", VariableKind::Grouping);
     builder.add_variable("u", VariableKind::Latent);
 

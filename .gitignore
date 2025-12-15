@@ -79,3 +79,20 @@ compile_commands.json
 
 # .gihub folder
 .github/
+
+# Session notes and debug files
+DEBUG_SESSION*.md
+SESSION_*.md
+FINAL_TEST_STATUS.md
+TEST_RESULTS_SUMMARY.md
+
+# Temporary test files
+test_*_debug*
+test_*_minimal*
+test_crossed_model.py
+test_mom_*.py
+test_mom_*.R
+debug_*.cpp
+*.backup
+
+PreviousMixedModelCode/

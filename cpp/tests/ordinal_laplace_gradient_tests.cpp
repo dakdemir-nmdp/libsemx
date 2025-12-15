@@ -13,7 +13,7 @@ namespace {
 libsemx::ModelIR build_ordinal_model() {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "ordinal");
-    builder.add_variable("x", libsemx::VariableKind::Latent);
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_ord", "diagonal", 1);

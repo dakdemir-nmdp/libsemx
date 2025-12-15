@@ -14,8 +14,8 @@ void ModelIRBuilder::add_covariance(std::string id, std::string structure, std::
     graph_.add_covariance(std::move(id), std::move(structure), dimension, std::move(component_ids));
 }
 
-void ModelIRBuilder::add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id) {
-    graph_.add_random_effect(std::move(id), std::move(variables), std::move(covariance_id));
+void ModelIRBuilder::add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id, double lambda) {
+    graph_.add_random_effect(std::move(id), std::move(variables), std::move(covariance_id), lambda);
 }
 
 void ModelIRBuilder::register_parameter(std::string id, double initial_value) {

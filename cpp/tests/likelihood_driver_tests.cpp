@@ -284,7 +284,7 @@ TEST_CASE("Model parameter ordering stays aligned with gradient map", "[likeliho
 TEST_CASE("LikelihoodDriver fits binomial mixed model with Laplace gradients", "[likelihood_driver][laplace][fit]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("u", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
@@ -343,7 +343,7 @@ TEST_CASE("LikelihoodDriver fits binomial mixed model with Laplace gradients", "
 TEST_CASE("LikelihoodDriver fits multi-effect binomial Laplace model", "[likelihood_driver][laplace][fit][multi_effect]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("batch", libsemx::VariableKind::Grouping);
     builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
@@ -414,7 +414,7 @@ TEST_CASE("LikelihoodDriver fits multi-effect binomial Laplace model", "[likelih
 TEST_CASE("LikelihoodDriver fits mixed covariance Laplace model", "[likelihood_driver][laplace][fit][fixed_covariance]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
     builder.add_variable("batch", libsemx::VariableKind::Grouping);
     builder.add_variable("u_cluster", libsemx::VariableKind::Latent);
@@ -489,10 +489,10 @@ TEST_CASE("LikelihoodDriver fits mixed covariance Laplace model", "[likelihood_d
 TEST_CASE("LikelihoodDriver fits random-slope Laplace model", "[likelihood_driver][laplace][fit][random_slope]") {
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    builder.add_variable("intercept_col", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("z", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("intercept_col", libsemx::VariableKind::Exogenous);
+    builder.add_variable("z", libsemx::VariableKind::Exogenous);
     builder.add_variable("u_cluster2", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");
     builder.add_covariance("G_cluster2", "unstructured", 2);
@@ -574,12 +574,12 @@ TEST_CASE("LikelihoodDriver fits Kronecker Laplace model with multi-kernel covar
 
     libsemx::ModelIRBuilder builder;
     builder.add_variable("y", libsemx::VariableKind::Observed, "binomial");
-    builder.add_variable("x", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("x", libsemx::VariableKind::Exogenous);
     builder.add_variable("cluster", libsemx::VariableKind::Grouping);
-    builder.add_variable("t1e1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("t1e2", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("t2e1", libsemx::VariableKind::Observed, "gaussian");
-    builder.add_variable("t2e2", libsemx::VariableKind::Observed, "gaussian");
+    builder.add_variable("t1e1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("t1e2", libsemx::VariableKind::Exogenous);
+    builder.add_variable("t2e1", libsemx::VariableKind::Exogenous);
+    builder.add_variable("t2e2", libsemx::VariableKind::Exogenous);
     builder.add_variable("u_kron", libsemx::VariableKind::Latent);
     builder.add_variable("u_diag", libsemx::VariableKind::Latent);
     builder.add_edge(libsemx::EdgeKind::Regression, "x", "y", "beta");

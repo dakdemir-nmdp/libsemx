@@ -24,6 +24,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
@@ -31,6 +32,8 @@
 #include <vector>
 #include <list>
 #include <memory>
+#include <iomanip>
+#include <sstream>
 
 namespace libsemx {
 
@@ -42,6 +45,16 @@ namespace {
 
 
 using RowMajorMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using GroupMap = std::map<std::string, std::vector<std::size_t>>;
+
+std::string canonical_group_key(double value) {
+    if (!std::isfinite(value)) {
+        throw std::runtime_error("Grouping variable contains non-finite value");
+    }
+    std::ostringstream oss;
+    oss << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+    return oss.str();
+}
 
 
 struct RandomEffectInfo {
@@ -50,12 +63,13 @@ struct RandomEffectInfo {
     std::vector<std::string> design_vars;
     std::string covariance_id;
     const CovarianceSpec* cov_spec;
-    
+    double lambda = 1.0;  // Shrinkage/ridge parameter (1.0 = no shrinkage)
+
     // Dense storage
     std::vector<double> G_matrix;
     std::vector<double> G_inverse;
     std::vector<std::vector<double>> G_gradients;
-    
+
     // Sparse storage
     bool is_sparse = false;
     std::shared_ptr<Eigen::SparseMatrix<double>> G_sparse;
@@ -174,6 +188,7 @@ void build_random_effect_infos(
         info.design_vars.assign(re.variables.begin() + 1, re.variables.end());
         info.covariance_id = re.covariance_id;
         info.cov_spec = cov_it->second;
+        info.lambda = re.lambda;
         
         if (structure->is_sparse()) {
             info.is_sparse = true;
@@ -242,7 +257,7 @@ double quadratic_form(const std::vector<double>& vec,
                       const std::vector<double>& matrix,
                       std::size_t dim);
 
-std::map<double, std::vector<std::size_t>> build_group_map(
+GroupMap build_group_map(
     const RandomEffectInfo& info,
     const std::unordered_map<std::string, std::vector<double>>& data,
     std::size_t n) {
@@ -253,9 +268,9 @@ std::map<double, std::vector<std::size_t>> build_group_map(
     if (it->second.size() != n) {
         throw std::runtime_error("Grouping variable " + info.grouping_var + " size mismatch");
     }
-    std::map<double, std::vector<std::size_t>> groups;
+    GroupMap groups;
     for (std::size_t i = 0; i < n; ++i) {
-        groups[it->second[i]].push_back(i);
+        groups[canonical_group_key(it->second[i])].push_back(i);
     }
     return groups;
 }
@@ -271,6 +286,32 @@ const std::vector<double>& resolve_design_values(
         return lp_it->second;
     }
     throw std::runtime_error("Design variable not found: " + name);
+}
+
+long resolve_design_index(double raw_value,
+                          std::size_t q,
+                          const std::string& variable_name,
+                          const std::string& re_id) {
+    if (!std::isfinite(raw_value)) {
+        throw std::runtime_error("Non-finite design/group value encountered for " + variable_name);
+    }
+    double rounded = std::round(raw_value);
+    if (std::abs(raw_value - rounded) > 1e-8) {
+        throw std::runtime_error("Design/group variable " + variable_name +
+                                 " must be integer-coded for random effect " + re_id);
+    }
+
+    long idx = static_cast<long>(rounded);
+    if (idx >= 1 && static_cast<std::size_t>(idx) <= q) {
+        return idx - 1;  // 1-based encoded
+    }
+    if (idx >= 0 && static_cast<std::size_t>(idx) < q) {
+        return idx;  // 0-based encoded
+    }
+
+    throw std::runtime_error("Index " + std::to_string(idx) + " for " + variable_name +
+                             " in random effect " + re_id + " is out of bounds for dimension " +
+                             std::to_string(q));
 }
 
 std::vector<double> build_design_matrix(
@@ -302,28 +343,16 @@ std::vector<double> build_design_matrix(
         // Fallback: If q != n_i and no design vars, check if we can infer Z from grouping variable
         // This happens when we have repeated records (n_i > q) and the grouping variable
         // maps observations to levels of the random effect (1..q).
-        // We assume the grouping variable values are 1-based indices or 0-based?
-        // In R, factors are 1-based integers.
-        // Let's try to use the grouping variable itself as the index.
         try {
-             const auto& group_vals = resolve_design_values(info.grouping_var, data, linear_predictors);
-             // Check if values are within range [1, q] or [0, q-1]
-             // We'll assume 1-based if min >= 1, else 0-based?
-             // Or just check bounds.
-             
-             for (std::size_t r = 0; r < n_i; ++r) {
-                 double val = group_vals[indices[r]];
-                 long col_idx = static_cast<long>(val);
-                 
-                 if (col_idx < 0 || static_cast<std::size_t>(col_idx) >= q) {
-                     throw std::runtime_error("Index " + std::to_string(col_idx) + " out of bounds for covariance dimension " + std::to_string(q));
-                 }
-                 
-                 Z[r * q + col_idx] = 1.0;
-             }
-             return Z;
+            const auto& group_vals = resolve_design_values(info.grouping_var, data, linear_predictors);
+            for (std::size_t r = 0; r < n_i; ++r) {
+                double val = group_vals[indices[r]];
+                long col_idx = resolve_design_index(val, q, info.grouping_var, info.id);
+                Z[r * q + static_cast<std::size_t>(col_idx)] = 1.0;
+            }
+            return Z;
         } catch (...) {
-             // Fall through to error
+            // Fall through to error
         }
 
         throw std::runtime_error("Random effect " + info.id + " expects " + std::to_string(q) +
@@ -339,15 +368,8 @@ std::vector<double> build_design_matrix(
                     throw std::runtime_error("Design variable " + info.design_vars[0] + " has insufficient data length");
                 }
                 double val = values[indices[row]];
-                // Check if integer
-                if (std::floor(val) != val) {
-                     throw std::runtime_error("Design variable " + info.design_vars[0] + " must be integer-valued for index mapping");
-                }
-                long col_idx = static_cast<long>(val);
-                if (col_idx < 0 || static_cast<std::size_t>(col_idx) >= q) {
-                     throw std::runtime_error("Index " + std::to_string(col_idx) + " out of bounds for covariance dimension " + std::to_string(q));
-                }
-                Z[row * q + col_idx] = 1.0;
+                long col_idx = resolve_design_index(val, q, info.design_vars[0], info.id);
+                Z[row * q + static_cast<std::size_t>(col_idx)] = 1.0;
             }
             return Z;
         }
@@ -633,6 +655,8 @@ void compute_system_grad_hess(const LaplaceSystem& system,
     }
 
     for (const auto& outcome : outcomes) {
+        const bool shared_disp = outcome.disp.size() == 1;
+        const double shared_disp_value = shared_disp ? outcome.disp.front() : 0.0;
         std::size_t n = outcome.obs.size();
         for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
             if (std::isnan(outcome.obs[obs_idx])) {
@@ -669,7 +693,8 @@ void compute_system_grad_hess(const LaplaceSystem& system,
             }
 
             const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
-            auto eval = outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra);
+            const double dispersion_value = shared_disp ? shared_disp_value : outcome.disp[obs_idx];
+            auto eval = outcome.family->evaluate(outcome.obs[obs_idx], eta, dispersion_value, s, outcome.extra);
             if (evals_out) {
                 evals_out->push_back(eval);
             }
@@ -718,6 +743,8 @@ double compute_system_objective(const LaplaceSystem& system,
 
     // 1. Log-likelihood of data given u
     for (const auto& outcome : outcomes) {
+        const bool shared_disp = outcome.disp.size() == 1;
+        const double shared_disp_value = shared_disp ? outcome.disp.front() : 0.0;
         std::size_t n = outcome.obs.size();
         for (std::size_t obs_idx = 0; obs_idx < n; ++obs_idx) {
             if (std::isnan(outcome.obs[obs_idx])) continue;
@@ -725,13 +752,13 @@ double compute_system_objective(const LaplaceSystem& system,
             double eta = outcome.pred[obs_idx];
 
             if (obs_idx >= system.observation_entries.size()) {
-                 std::abort();
+                 throw std::runtime_error("Laplace system observation index out of range");
             }
 
             const auto& entries = system.observation_entries[obs_idx];
             for (const auto& entry : entries) {
                 if (entry.block_index >= system.blocks.size()) {
-                     std::abort();
+                     throw std::runtime_error("Laplace system block index out of range");
                 }
                 const auto& block = system.blocks[entry.block_index];
                 bool targets = false;
@@ -753,9 +780,10 @@ double compute_system_objective(const LaplaceSystem& system,
             const double s = outcome.status ? (*outcome.status)[obs_idx] : 1.0;
             
             if (!outcome.family) {
-                 std::abort();
+                 throw std::runtime_error("Outcome family pointer is null during Laplace evaluation");
             }
-            loglik += outcome.family->evaluate(outcome.obs[obs_idx], eta, outcome.disp[obs_idx], s, outcome.extra).log_likelihood;
+            const double dispersion_value = shared_disp ? shared_disp_value : outcome.disp[obs_idx];
+            loglik += outcome.family->evaluate(outcome.obs[obs_idx], eta, dispersion_value, s, outcome.extra).log_likelihood;
         }
     }
 
@@ -929,21 +957,22 @@ void compute_system_grad_hess_sparse(const LaplaceSystem& system,
     
     {
         for (const auto& block : system.blocks) {
+            const double lambda = block.info->lambda;
             if (block.info->is_sparse) {
-                // Gradient: G^-1 u
+                // Gradient: -lambda * G^-1 u
                 Eigen::Map<const Eigen::VectorXd> u_vec(&u[block.offset], block.q);
                 Eigen::VectorXd g_inv_u = block.info->sparse_solver->solve(u_vec);
                 for (int i=0; i<block.q; ++i) {
-                    grad[block.offset + i] -= g_inv_u[i];
+                    grad[block.offset + i] -= lambda * g_inv_u[i];
                 }
 
-                // Hessian: Add G^-1
+                // Hessian: Add lambda * G^-1
                 if (block.info->G_sparse->nonZeros() == block.info->G_sparse->rows()) {
                      // Diagonal optimization
                      for (int k=0; k<block.info->G_sparse->outerSize(); ++k) {
                         for (Eigen::SparseMatrix<double>::InnerIterator it(*block.info->G_sparse, k); it; ++it) {
                             if (it.row() == it.col()) {
-                                double val = 1.0 / it.value();
+                                double val = lambda / it.value();
                                 triplets.emplace_back(block.offset + it.row(), block.offset + it.col(), val);
                             }
                         }
@@ -955,7 +984,7 @@ void compute_system_grad_hess_sparse(const LaplaceSystem& system,
                          rhs[i] = 1.0;
                          Eigen::VectorXd col = block.info->sparse_solver->solve(rhs);
                          for (int j=0; j<block.q; ++j) {
-                             double val = col[j];
+                             double val = lambda * col[j];
                              if (val != 0.0) {
                                  triplets.emplace_back(block.offset + j, block.offset + i, val);
                              }
@@ -969,7 +998,7 @@ void compute_system_grad_hess_sparse(const LaplaceSystem& system,
                 for (std::size_t r = 0; r < block.q; ++r) {
                     double sum = 0.0;
                     for (std::size_t c = 0; c < block.q; ++c) {
-                        double val = G_inv[r * block.q + c];
+                        double val = lambda * G_inv[r * block.q + c];
                         if (val != 0.0) triplets.emplace_back(block.offset + r, block.offset + c, val);
                         sum += val * u_block[c];
                     }
@@ -1346,13 +1375,14 @@ bool solve_laplace_block(const LaplaceBlock& block,
         std::fill(grad.begin(), grad.end(), 0.0);
         std::fill(neg_hess.begin(), neg_hess.end(), 0.0);
 
-        // Prior Grad/Hess
+        // Prior Grad/Hess (scaled by lambda for shrinkage)
+        const double lambda = block.info->lambda;
         if (!block.info->is_sparse) {
             const double* G_inv = block.info->G_inverse.data();
             for (size_t r = 0; r < q; ++r) {
                 for (size_t c = 0; c < q; ++c) {
-                    neg_hess[r * q + c] += G_inv[r * q + c];
-                    grad[r] -= G_inv[r * q + c] * u_block[c];
+                    neg_hess[r * q + c] += lambda * G_inv[r * q + c];
+                    grad[r] -= lambda * G_inv[r * q + c] * u_block[c];
                 }
             }
         }
@@ -1437,11 +1467,12 @@ bool solve_laplace_block(const LaplaceBlock& block,
     
     // Recompute final Hessian for return
     std::fill(neg_hess.begin(), neg_hess.end(), 0.0);
+    const double lambda = block.info->lambda;
     if (!block.info->is_sparse) {
         const double* G_inv = block.info->G_inverse.data();
         for (size_t r = 0; r < q; ++r) {
             for (size_t c = 0; c < q; ++c) {
-                neg_hess[r * q + c] += G_inv[r * q + c];
+                neg_hess[r * q + c] += lambda * G_inv[r * q + c];
             }
         }
     }
@@ -1762,7 +1793,14 @@ double compute_prior_loglik(const LaplaceSystem& system,
         } else {
             quad = quadratic_form(u_block, info.G_inverse, block.q);
         }
-        total += -0.5 * (block.q * log_2pi + info.log_det_G + quad);
+
+        // With shrinkage lambda: prior is N(0, G/lambda)
+        // log|G/lambda| = log|G| - q*log(lambda)
+        // quad form: lambda * u^T G^{-1} u
+        double log_det_scaled = info.log_det_G - block.q * std::log(info.lambda);
+        double quad_scaled = info.lambda * quad;
+
+        total += -0.5 * (block.q * log_2pi + log_det_scaled + quad_scaled);
     }
     return total;
 }
@@ -2027,7 +2065,20 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
                                                 const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
                                                 EstimationMethod method,
                                                 bool force_laplace) const {
-    
+
+
+    // Auto-detect and route to spectral decomposition path if eligible
+    // Check multivariate first (multiple traits), then univariate (single trait)
+    // (much faster O(n*d³) algorithm for multi-trait GBLUP/GWAS-style models)
+    if (!force_laplace && is_multivariate_spectral_eligible(model, fixed_covariance_data)) {
+        return evaluate_multivariate_spectral_loglik(model, data, covariance_parameters, fixed_covariance_data, method);
+    }
+
+    // (much faster O(n) algorithm for single-trait GBLUP/GWAS-style models)
+    if (!force_laplace && is_spectral_eligible(model, fixed_covariance_data)) {
+        return evaluate_spectral_loglik(model, data, covariance_parameters, fixed_covariance_data, method);
+    }
+
     if (model.random_effects.empty()) {
         double total = 0.0;
         // std::cout << "Evaluating LL..." << std::endl;
@@ -2254,7 +2305,7 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
         });
         if (var_it != model.variables.end() && var_it->family == "gaussian") {
             const auto& outcome = outcomes[0];
-            std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
+                std::vector<GroupMap> group_maps;
             group_maps.reserve(random_effect_infos.size());
             for (const auto& info : random_effect_infos) {
                 group_maps.push_back(build_group_map(info, data, n));
@@ -2349,7 +2400,127 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
 
                     total_ll += -0.5 * (n_i * log_2pi + log_det + quad);
                 }
-                
+
+                // Apply REML adjustment if needed
+                if (method == EstimationMethod::REML) {
+                    // Identify fixed effect predictors (non-latent regression sources)
+                    std::unordered_set<std::string> latent_vars;
+                    for (const auto& var : model.variables) {
+                        if (var.kind == VariableKind::Latent) {
+                            latent_vars.insert(var.name);
+                        }
+                    }
+
+                    std::vector<std::string> fixed_predictors;
+                    for (const auto& edge : model.edges) {
+                        if (edge.kind == EdgeKind::Regression && edge.target == outcome.name) {
+                            if (latent_vars.find(edge.source) == latent_vars.end()) {
+                                fixed_predictors.push_back(edge.source);
+                            }
+                        }
+                    }
+                    std::sort(fixed_predictors.begin(), fixed_predictors.end());
+
+                    if (!fixed_predictors.empty()) {
+                        std::size_t p = fixed_predictors.size();
+                        std::vector<double> Xt_Vinv_X(p * p, 0.0);
+
+                        // Loop over groups to build X^T V^{-1} X
+                        for (const auto& [group_id, indices] : groups) {
+                            size_t n_i = indices.size();
+
+                            // Build X_i for this group
+                            std::vector<double> X_i(n_i * p);
+                            for (std::size_t j = 0; j < p; ++j) {
+                                auto it = data.find(fixed_predictors[j]);
+                                if (it == data.end()) continue;
+                                for (std::size_t r = 0; r < n_i; ++r) {
+                                    X_i[r * p + j] = it->second[indices[r]];
+                                }
+                            }
+
+                            // Build V_i for this group (same code as before)
+                            std::vector<double> V_i(n_i * n_i, 0.0);
+                            for(size_t r=0; r<n_i; ++r) {
+                                V_i[r * n_i + r] = outcome.disp[indices[r]];
+                            }
+                            for (size_t re_idx = 0; re_idx < random_effect_infos.size(); ++re_idx) {
+                                const auto& info = random_effect_infos[re_idx];
+                                auto Z_i = build_design_matrix(info, indices, data, linear_predictors);
+                                size_t q = info.cov_spec->dimension;
+                                std::vector<double> ZG(n_i * q, 0.0);
+                                if (info.is_sparse) {
+                                    if (!info.G_sparse) throw std::runtime_error("G_sparse is null");
+                                    Eigen::Map<const RowMajorMatrix> Z_map(Z_i.data(), n_i, q);
+                                    Eigen::MatrixXd Z_dense = Z_map;
+                                    Eigen::MatrixXd ZG_eigen = Z_dense * *info.G_sparse;
+                                    Eigen::Map<RowMajorMatrix>(ZG.data(), n_i, q) = ZG_eigen;
+                                } else {
+                                    for (std::size_t r = 0; r < n_i; ++r) {
+                                        for (std::size_t c = 0; c < q; ++c) {
+                                            double sum = 0.0;
+                                            for (std::size_t k = 0; k < q; ++k) {
+                                                sum += Z_i[r * q + k] * info.G_matrix[k * q + c];
+                                            }
+                                            ZG[r * q + c] = sum;
+                                        }
+                                    }
+                                }
+                                for (std::size_t r = 0; r < n_i; ++r) {
+                                    for (std::size_t c = 0; c < n_i; ++c) {
+                                        double sum = 0.0;
+                                        for (std::size_t k = 0; k < q; ++k) {
+                                            sum += ZG[r * q + k] * Z_i[c * q + k];
+                                        }
+                                        V_i[r * n_i + c] += sum;
+                                    }
+                                }
+                            }
+
+                            // Invert V_i
+                            std::vector<double> L_i(n_i * n_i);
+                            try {
+                                cholesky(n_i, V_i, L_i);
+                            } catch(...) {
+                                return -std::numeric_limits<double>::infinity();
+                            }
+                            std::vector<double> V_inv_i(n_i * n_i, 0.0);
+                            for (std::size_t j = 0; j < n_i; ++j) {
+                                std::vector<double> e_j(n_i, 0.0);
+                                e_j[j] = 1.0;
+                                auto col_j = solve_cholesky(n_i, L_i, e_j);
+                                for (std::size_t r = 0; r < n_i; ++r) {
+                                    V_inv_i[r * n_i + j] = col_j[r];
+                                }
+                            }
+
+                            // Compute X_i^T V_i^{-1} X_i and add to total
+                            for (std::size_t r = 0; r < p; ++r) {
+                                for (std::size_t c = 0; c < p; ++c) {
+                                    double sum = 0.0;
+                                    for (std::size_t i = 0; i < n_i; ++i) {
+                                        for (std::size_t j = 0; j < n_i; ++j) {
+                                            sum += X_i[i * p + r] * V_inv_i[i * n_i + j] * X_i[j * p + c];
+                                        }
+                                    }
+                                    Xt_Vinv_X[r * p + c] += sum;
+                                }
+                            }
+                        }
+
+                        // Apply REML adjustment
+                        std::vector<double> L_reml(p * p);
+                        try {
+                            cholesky(p, Xt_Vinv_X, L_reml);
+                            double log_det_reml = log_det_cholesky(p, L_reml);
+                            total_ll -= 0.5 * log_det_reml;
+                            total_ll += 0.5 * static_cast<double>(p) * log_2pi;
+                        } catch (...) {
+                            return -std::numeric_limits<double>::infinity();
+                        }
+                    }
+                }
+
                 return total_ll;
             }
 
@@ -2472,7 +2643,9 @@ double LikelihoodDriver::evaluate_model_loglik(const ModelIR& model,
                      } catch (...) {
                          return -std::numeric_limits<double>::infinity();
                      }
+                 } else {
                  }
+            } else {
             }
             return total;
         }
@@ -2545,7 +2718,17 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                                                 const std::unordered_map<std::string, DataParamMapping>& dispersion_param_mappings,
                                                 const std::unordered_map<std::string, std::vector<std::string>>& extra_param_mappings,
                                                 bool force_laplace) const {
-    
+
+    // Auto-detect and route to spectral decomposition path if eligible
+    // Check multivariate first (multiple traits), then univariate (single trait)
+    if (!force_laplace && is_multivariate_spectral_eligible(model, fixed_covariance_data)) {
+        return evaluate_multivariate_spectral_gradient(model, data, covariance_parameters, fixed_covariance_data, method);
+    }
+
+    if (!force_laplace && is_spectral_eligible(model, fixed_covariance_data)) {
+        return evaluate_spectral_gradient(model, data, covariance_parameters, fixed_covariance_data, method);
+    }
+
     std::unordered_map<std::string, double> gradients;
     (void)method;
 
@@ -2754,7 +2937,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
             const auto& disp_data = outcome.disp;
             std::string obs_var_name = outcome.name;
 
-            std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
+            std::vector<GroupMap> group_maps;
             group_maps.reserve(random_effect_infos.size());
             for (const auto& info : random_effect_infos) {
                 group_maps.push_back(build_group_map(info, data, n));
@@ -2915,6 +3098,14 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                         }
 
                         if (info.is_sparse) {
+                             // Determine parameter naming convention:
+                             // For single-parameter covariances (scaled_fixed, genomic, grm), use just the covariance_id
+                             // For multi-parameter covariances (unstructured, etc), append the parameter index
+                             bool single_param = (info.cov_spec &&
+                                 (info.cov_spec->structure == "scaled_fixed" ||
+                                  info.cov_spec->structure == "genomic" ||
+                                  info.cov_spec->structure == "grm"));
+
                              for (std::size_t k = 0; k < info.G_gradients_sparse.size(); ++k) {
                                 const auto& dG = info.G_gradients_sparse[k];
                                 double trace = 0.0;
@@ -2923,10 +3114,20 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                                         trace += M[it.col() * q + it.row()] * it.value();
                                     }
                                 }
-                                std::string param_name = info.covariance_id + "_" + std::to_string(k);
+                                std::string param_name = single_param
+                                    ? info.covariance_id
+                                    : info.covariance_id + "_" + std::to_string(k);
                                 gradients[param_name] += 0.5 * trace;
                              }
                         } else {
+                            // Determine parameter naming convention:
+                            // For single-parameter covariances (scaled_fixed, genomic, grm), use just the covariance_id
+                            // For multi-parameter covariances (unstructured, etc), append the parameter index
+                            bool single_param = (info.cov_spec &&
+                                (info.cov_spec->structure == "scaled_fixed" ||
+                                 info.cov_spec->structure == "genomic" ||
+                                 info.cov_spec->structure == "grm"));
+
                             for (std::size_t k = 0; k < info.G_gradients.size(); ++k) {
                                 const auto& dG = info.G_gradients[k];
                                 double trace = 0.0;
@@ -2935,7 +3136,9 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                                         trace += M[r * q + c] * dG[c * q + r];
                                     }
                                 }
-                                std::string param_name = info.covariance_id + "_" + std::to_string(k);
+                                std::string param_name = single_param
+                                    ? info.covariance_id
+                                    : info.covariance_id + "_" + std::to_string(k);
                                 gradients[param_name] += 0.5 * trace;
                             }
                         }
@@ -3132,7 +3335,7 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                 } else {
                     du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, forcing);
                 }
-                
+
                 double logdet_adjust = 0.0;
                 std::size_t eval_offset = 0;
                 for (const auto& outcome : outcomes) {
@@ -3312,7 +3515,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
     // Mixed model logic
     std::vector<RandomEffectInfo> random_effect_infos;
     build_random_effect_infos(model, covariance_parameters, fixed_covariance_data, true, random_effect_infos);
-    
+
     if (random_effect_infos.empty()) {
         throw std::runtime_error("Random effect metadata missing");
     }
@@ -3423,6 +3626,8 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
             }
         }
         std::sort(fixed_effect_vars.begin(), fixed_effect_vars.end());
+        for (const auto& v : fixed_effect_vars) {
+        }
     }
 
     if (obs_family_name == "gaussian" && all_outcome_vars.size() <= 1 && !force_laplace) {
@@ -3457,7 +3662,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
             }
 
             // Group by missingness pattern
-            std::map<std::vector<std::size_t>, std::vector<std::size_t>> patterns;
+            std::map<std::vector<std::size_t>, std::vector<std::string>> patterns;
             for (const auto& [group_id, all_indices] : group_map) {
                 std::vector<std::size_t> indices;
                 indices.reserve(all_indices.size());
@@ -3479,8 +3684,8 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
 
             for (const auto& [rel_indices, group_ids] : patterns) {
                 std::size_t n_i = rel_indices.size();
-                std::size_t rep_group_id = group_ids[0];
-                const auto& rep_all_indices = group_map[rep_group_id];
+                const std::string& rep_group_id = group_ids[0];
+                const auto& rep_all_indices = group_map.at(rep_group_id);
                 std::vector<std::size_t> rep_indices;
                 rep_indices.reserve(n_i);
                 for (auto rel_idx : rel_indices) {
@@ -3544,8 +3749,8 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 }
 
                 // Accumulate over groups in pattern
-                for (auto gid : group_ids) {
-                    const auto& all_ind = group_map[gid];
+                for (const auto& gid : group_ids) {
+                    const auto& all_ind = group_map.at(gid);
                     std::vector<double> resid(n_i);
                     for (std::size_t r = 0; r < n_i; ++r) {
                         std::size_t idx = all_ind[rel_indices[r]];
@@ -3715,12 +3920,13 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                 } catch (...) {
                     return {-std::numeric_limits<double>::infinity(), gradients};
                 }
+            } else {
             }
             
             return {total_loglik, gradients};
         }
 
-        std::vector<std::map<double, std::vector<std::size_t>>> group_maps;
+        std::vector<GroupMap> group_maps;
         group_maps.reserve(random_effect_infos.size());
         for (const auto& info : random_effect_infos) {
             group_maps.push_back(build_group_map(info, data, n));
@@ -4200,7 +4406,7 @@ std::pair<double, std::unordered_map<std::string, double>> LikelihoodDriver::eva
                     du = solve_cholesky(system.total_dim, laplace_result.chol_neg_hessian, cov_forcing);
                 }
             }
-            
+
             double logdet_adjust_total = 0.0;
             std::size_t eval_offset_cov = 0;
             for(size_t k=0; k<outcomes.size(); ++k) {
@@ -4362,59 +4568,87 @@ std::unordered_map<std::string, std::vector<double>> LikelihoodDriver::compute_r
         return random_effects;
     }
 
-    // 1. Identify observed variable and family
-    std::string obs_var_name;
-    std::string obs_family_name;
+    static const std::vector<double> kEmptyVec;
+    std::vector<OutcomeData> outcomes;
+    std::vector<std::unique_ptr<OutcomeFamily>> families;
+    std::optional<std::size_t> n_opt;
+
+    auto require_length = [&](const std::string& name, std::size_t n_expected, const std::vector<double>& vec, bool allow_empty) {
+        if (vec.empty()) {
+            if (allow_empty) {
+                return;
+            }
+            throw std::runtime_error(name + " is empty");
+        }
+        if (vec.size() != n_expected) {
+            throw std::runtime_error("Length mismatch for " + name + ": expected " + std::to_string(n_expected) + ", got " + std::to_string(vec.size()));
+        }
+    };
+
     for (const auto& var : model.variables) {
-        if (var.kind == VariableKind::Observed) {
-            if (var.family.empty()) continue;
-            bool is_target = false;
-            for (const auto& edge : model.edges) {
-                if (edge.target == var.name) {
-                    is_target = true;
-                    break;
-                }
-            }
-            if (is_target || obs_var_name.empty()) {
-                obs_var_name = var.name;
-                obs_family_name = var.family;
+        if (var.kind != VariableKind::Observed || var.family.empty()) {
+            continue;
+        }
+        auto obs_it = data.find(var.name);
+        if (obs_it == data.end()) {
+            continue;
+        }
+        const auto& obs_data = obs_it->second;
+        if (obs_data.empty()) {
+            continue;
+        }
+
+        std::size_t n = obs_data.size();
+        if (!n_opt) {
+            n_opt = n;
+        } else if (*n_opt != n) {
+            throw std::runtime_error("All observed outcomes must have the same number of observations for random effects estimation");
+        }
+
+        auto pred_it = linear_predictors.find(var.name);
+        if (pred_it == linear_predictors.end()) {
+            if (linear_predictors.size() == 1) {
+                pred_it = linear_predictors.begin();
+            } else {
+                continue;
             }
         }
-    }
-    if (obs_var_name.empty()) {
-        return random_effects;
-    }
+        const auto& pred_data = pred_it->second;
+        require_length("linear_predictor for " + var.name, n, pred_data, false);
 
-    auto pred_it = linear_predictors.find(obs_var_name);
-    if (pred_it == linear_predictors.end()) {
-        if (linear_predictors.size() == 1) {
-            obs_var_name = linear_predictors.begin()->first;
-            auto var_it = std::find_if(model.variables.begin(), model.variables.end(), [&](const auto& v) {
-                return v.name == obs_var_name;
-            });
-            if (var_it == model.variables.end()) {
-                return random_effects;
+        auto disp_it = dispersions.find(var.name);
+        if (disp_it == dispersions.end()) {
+            if (dispersions.size() == 1) {
+                disp_it = dispersions.begin();
+            } else {
+                continue;
             }
-            obs_family_name = var_it->family;
-            pred_it = linear_predictors.begin();
-        } else {
-            return random_effects;
         }
-    }
-    const auto& pred_data = pred_it->second;
+        const auto& disp_data = disp_it->second;
+        require_length("dispersion for " + var.name, n, disp_data, false);
 
-    auto obs_it = data.find(obs_var_name);
-    if (obs_it == data.end()) {
+        const std::vector<double>* status_vec = nullptr;
+        if (status.count(var.name)) {
+            status_vec = &status.at(var.name);
+            require_length("status for " + var.name, n, *status_vec, true);
+        }
+
+        const std::vector<double>* extra_vec = nullptr;
+        if (extra_params.count(var.name)) {
+            extra_vec = &extra_params.at(var.name);
+            require_length("extra params for " + var.name, n, *extra_vec, true);
+        }
+
+        families.push_back(OutcomeFamilyFactory::create(var.family));
+        const auto& extra_ref = extra_vec ? *extra_vec : kEmptyVec;
+        outcomes.push_back({var.name, obs_data, pred_data, disp_data, status_vec, extra_ref, families.back().get()});
+    }
+
+    if (outcomes.empty()) {
         return random_effects;
     }
-    const auto& obs_data = obs_it->second;
-    size_t n = obs_data.size();
 
-    auto disp_it = dispersions.find(obs_var_name);
-    if (disp_it == dispersions.end()) {
-        return random_effects;
-    }
-    const auto& disp_data = disp_it->second;
+    const std::size_t n = *n_opt;
 
     // 2. Build RandomEffectInfos
     std::vector<RandomEffectInfo> random_effect_infos;
@@ -4428,19 +4662,7 @@ std::unordered_map<std::string, std::vector<double>> LikelihoodDriver::compute_r
     if (system.total_dim == 0) return random_effects;
 
     // 4. Solve Laplace System
-    auto outcome_family = OutcomeFamilyFactory::create(obs_family_name);
     LaplaceSystemResult laplace_result;
-    
-    const std::vector<double>* status_vec = nullptr;
-    if (status.count(obs_var_name)) status_vec = &status.at(obs_var_name);
-    
-    const std::vector<double>* extra_vec = nullptr;
-    if (extra_params.count(obs_var_name)) extra_vec = &extra_params.at(obs_var_name);
-    const std::vector<double>& ep = extra_vec ? *extra_vec : std::vector<double>{};
-
-    std::vector<OutcomeData> outcomes;
-    outcomes.push_back({obs_var_name, obs_data, pred_data, disp_data, status_vec, ep, outcome_family.get()});
-
     if (!solve_laplace_system(system, outcomes, laplace_result)) {
         return random_effects;
     }
@@ -4903,6 +5125,613 @@ FitResult LikelihoodDriver::fit_multi_group(const std::vector<ModelIR>& models,
     fit_result.parameter_names = multi_obj.parameter_names();
 
     return fit_result;
+}
+
+// ============================================================================
+// Spectral Decomposition / SCD Integration
+// ============================================================================
+
+bool LikelihoodDriver::is_spectral_eligible(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    SpectralModelInfo* info) const {
+
+    // Requirement 1: Exactly one random effect
+    if (model.random_effects.size() != 1) {
+        return false;
+    }
+
+    const auto& random_effect = model.random_effects[0];
+
+    // Requirement 2: Find the covariance structure for this random effect
+    const CovarianceSpec* cov_spec = nullptr;
+    for (const auto& cov : model.covariances) {
+        if (cov.id == random_effect.covariance_id) {
+            cov_spec = &cov;
+            break;
+        }
+    }
+
+    if (!cov_spec) {
+        return false;
+    }
+
+    // Requirement 3: Covariance must be genomic/grm or scaled_fixed (dense kernel)
+    std::string cov_type = cov_spec->structure;
+    std::transform(cov_type.begin(), cov_type.end(), cov_type.begin(), ::tolower);
+
+    if (cov_type != "genomic" && cov_type != "grm" && cov_type != "scaled_fixed") {
+        return false;
+    }
+
+    // Requirement 4: Kernel data must be available
+    auto kernel_it = fixed_covariance_data.find(cov_spec->id);
+    if (kernel_it == fixed_covariance_data.end() || kernel_it->second.empty()) {
+        return false;
+    }
+
+    // Requirement 5: Exactly one observed Gaussian outcome variable
+    std::string outcome_var;
+    int n_observed_outcomes = 0;
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Observed) {
+            n_observed_outcomes++;
+            if (n_observed_outcomes > 1) {
+                return false; // Multiple outcomes
+            }
+
+            // Check if Gaussian family
+            if (var.family.empty() || var.family == "gaussian") {
+                outcome_var = var.name;
+            } else {
+                return false; // Non-Gaussian outcome
+            }
+        }
+    }
+
+    if (n_observed_outcomes != 1) {
+        return false;
+    }
+
+    // Requirement 6: No latent variables (no SEM structure)
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Latent) {
+            return false;
+        }
+    }
+
+    // Requirement 7: Random effect variables must match outcome dimension
+    if (random_effect.variables.size() != 1) {
+        return false; // Multi-variate random effect not supported
+    }
+
+    if (random_effect.variables[0] != outcome_var) {
+        return false; // Random effect not on outcome variable
+    }
+
+    // If caller wants model info, populate it
+    if (info) {
+        info->kernel_id = cov_spec->id;
+        info->outcome_var = outcome_var;
+        info->random_effect_id = random_effect.id;
+        info->lambda = random_effect.lambda;
+        info->n_obs = cov_spec->dimension;
+    }
+
+    return true;
+}
+
+double LikelihoodDriver::evaluate_spectral_loglik(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    EstimationMethod method) const {
+
+    // Gather model information
+    SpectralModelInfo info;
+    if (!is_spectral_eligible(model, fixed_covariance_data, &info)) {
+        throw std::runtime_error("Model is not eligible for spectral decomposition");
+    }
+
+    // Extract observed outcome data
+    auto y_it = data.find(info.outcome_var);
+    if (y_it == data.end()) {
+        throw std::runtime_error("Missing outcome data for variable: " + info.outcome_var);
+    }
+
+    const size_t n = y_it->second.size();
+    Eigen::VectorXd y = Eigen::Map<const Eigen::VectorXd>(y_it->second.data(), n);
+
+    // Build fixed effects design matrix X from regression edges
+    std::vector<std::string> predictor_vars;
+    for (const auto& edge : model.edges) {
+        if (edge.kind == EdgeKind::Regression && edge.target == info.outcome_var) {
+            predictor_vars.push_back(edge.source);
+        }
+    }
+
+    Eigen::MatrixXd X;
+    if (predictor_vars.empty()) {
+        // Intercept-only model
+        X = Eigen::MatrixXd::Ones(n, 1);
+    } else {
+        X.resize(n, predictor_vars.size());
+        for (size_t j = 0; j < predictor_vars.size(); ++j) {
+            auto pred_it = data.find(predictor_vars[j]);
+            if (pred_it == data.end()) {
+                throw std::runtime_error("Missing predictor data: " + predictor_vars[j]);
+            }
+            X.col(j) = Eigen::Map<const Eigen::VectorXd>(pred_it->second.data(), n);
+        }
+    }
+
+    // Extract variance components from covariance_parameters
+    // The random effect covariance has 1 parameter (the scaling factor σ²_g)
+    auto cov_param_it = covariance_parameters.find(info.kernel_id);
+    if (cov_param_it == covariance_parameters.end() || cov_param_it->second.empty()) {
+        throw std::runtime_error("Missing covariance parameter for: " + info.kernel_id);
+    }
+
+    double sigma_g_sq = cov_param_it->second[0];
+
+    // Residual variance σ²_e comes from the dispersion parameter for the outcome
+    auto disp_param_it = covariance_parameters.find(info.outcome_var + "_dispersion");
+    double sigma_e_sq = 1.0; // Default
+    if (disp_param_it != covariance_parameters.end() && !disp_param_it->second.empty()) {
+        sigma_e_sq = disp_param_it->second[0];
+    }
+
+    // Apply shrinkage: with lambda > 1, we scale down the genetic variance
+    // Covariance becomes σ²_g K / lambda instead of σ²_g K
+    double sigma_g_sq_scaled = sigma_g_sq / info.lambda;
+
+    // Get kernel matrix
+    auto kernel_it = fixed_covariance_data.find(info.kernel_id);
+    if (kernel_it == fixed_covariance_data.end() || kernel_it->second.empty()) {
+        throw std::runtime_error("Missing kernel data for: " + info.kernel_id);
+    }
+
+    const auto& kernel_flat = kernel_it->second[0];
+    if (kernel_flat.size() != n * n) {
+        throw std::runtime_error("Kernel dimension mismatch");
+    }
+
+    Eigen::MatrixXd K = Eigen::Map<const Eigen::MatrixXd>(kernel_flat.data(), n, n);
+
+    // Create or reuse spectral evaluator (eigendecomposition is cached)
+    if (!spectral_cache_) {
+        spectral_cache_ = std::make_shared<SpectralLikelihoodEvaluator>(K);
+    }
+
+    // Evaluate likelihood using spectral method (with scaled variance for shrinkage)
+    bool use_reml = (method == EstimationMethod::REML);
+    double loglik = spectral_cache_->evaluate_loglik(y, X, sigma_g_sq_scaled, sigma_e_sq, use_reml);
+
+    return loglik;
+}
+
+std::unordered_map<std::string, double> LikelihoodDriver::evaluate_spectral_gradient(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    EstimationMethod method) const {
+
+    // Gather model information
+    SpectralModelInfo info;
+    if (!is_spectral_eligible(model, fixed_covariance_data, &info)) {
+        throw std::runtime_error("Model is not eligible for spectral decomposition");
+    }
+
+    // Extract observed outcome data
+    auto y_it = data.find(info.outcome_var);
+    if (y_it == data.end()) {
+        throw std::runtime_error("Missing outcome data for variable: " + info.outcome_var);
+    }
+
+    const size_t n = y_it->second.size();
+    Eigen::VectorXd y = Eigen::Map<const Eigen::VectorXd>(y_it->second.data(), n);
+
+    // Build fixed effects design matrix X
+    std::vector<std::string> predictor_vars;
+    for (const auto& edge : model.edges) {
+        if (edge.kind == EdgeKind::Regression && edge.target == info.outcome_var) {
+            predictor_vars.push_back(edge.source);
+        }
+    }
+
+    Eigen::MatrixXd X;
+    if (predictor_vars.empty()) {
+        X = Eigen::MatrixXd::Ones(n, 1);
+    } else {
+        X.resize(n, predictor_vars.size());
+        for (size_t j = 0; j < predictor_vars.size(); ++j) {
+            auto pred_it = data.find(predictor_vars[j]);
+            if (pred_it == data.end()) {
+                throw std::runtime_error("Missing predictor data: " + predictor_vars[j]);
+            }
+            X.col(j) = Eigen::Map<const Eigen::VectorXd>(pred_it->second.data(), n);
+        }
+    }
+
+    // Extract variance components
+    auto cov_param_it = covariance_parameters.find(info.kernel_id);
+    if (cov_param_it == covariance_parameters.end() || cov_param_it->second.empty()) {
+        throw std::runtime_error("Missing covariance parameter for: " + info.kernel_id);
+    }
+
+    double sigma_g_sq = cov_param_it->second[0];
+
+    auto disp_param_it = covariance_parameters.find(info.outcome_var + "_dispersion");
+    double sigma_e_sq = 1.0;
+    if (disp_param_it != covariance_parameters.end() && !disp_param_it->second.empty()) {
+        sigma_e_sq = disp_param_it->second[0];
+    }
+
+    // Apply shrinkage: with lambda > 1, we scale down the genetic variance
+    double sigma_g_sq_scaled = sigma_g_sq / info.lambda;
+
+    // Get kernel matrix
+    auto kernel_it = fixed_covariance_data.find(info.kernel_id);
+    if (kernel_it == fixed_covariance_data.end() || kernel_it->second.empty()) {
+        throw std::runtime_error("Missing kernel data for: " + info.kernel_id);
+    }
+
+    const auto& kernel_flat = kernel_it->second[0];
+    Eigen::MatrixXd K = Eigen::Map<const Eigen::MatrixXd>(kernel_flat.data(), n, n);
+
+    // Create or reuse spectral evaluator
+    if (!spectral_cache_) {
+        spectral_cache_ = std::make_shared<SpectralLikelihoodEvaluator>(K);
+    }
+
+    // Evaluate gradient using spectral method (with scaled variance)
+    bool use_reml = (method == EstimationMethod::REML);
+    Eigen::Vector2d grad = spectral_cache_->evaluate_gradient(y, X, sigma_g_sq_scaled, sigma_e_sq, use_reml);
+
+    // Apply chain rule for shrinkage: d/dσ²_g = (d/dσ²_g_scaled) * (1/lambda)
+    std::unordered_map<std::string, double> gradient;
+    gradient[info.kernel_id] = grad(0) / info.lambda; // d/dσ²_g (chain rule)
+    gradient[info.outcome_var + "_dispersion"] = grad(1); // d/dσ²_e (unchanged)
+
+    return gradient;
+}
+
+// ============================================================================
+// Multivariate Spectral Decomposition / SCD Integration
+// ============================================================================
+
+bool LikelihoodDriver::is_multivariate_spectral_eligible(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    MultivariateSpectralModelInfo* info) const {
+
+    // Requirement 1: Exactly one random effect
+    if (model.random_effects.size() != 1) {
+        return false;
+    }
+
+    const auto& random_effect = model.random_effects[0];
+
+    // Requirement 2: Find the covariance structure for this random effect
+    const CovarianceSpec* cov_spec = nullptr;
+    for (const auto& cov : model.covariances) {
+        if (cov.id == random_effect.covariance_id) {
+            cov_spec = &cov;
+            break;
+        }
+    }
+
+    if (!cov_spec) {
+        return false;
+    }
+
+    // Requirement 3: Covariance must be genomic/grm or scaled_fixed (dense kernel)
+    std::string cov_type = cov_spec->structure;
+    std::transform(cov_type.begin(), cov_type.end(), cov_type.begin(), ::tolower);
+
+    if (cov_type != "genomic" && cov_type != "grm" && cov_type != "scaled_fixed") {
+        return false;
+    }
+
+    // Requirement 4: Kernel data must be available
+    auto kernel_it = fixed_covariance_data.find(cov_spec->id);
+    if (kernel_it == fixed_covariance_data.end() || kernel_it->second.empty()) {
+        return false;
+    }
+
+    // Requirement 5: Multiple observed Gaussian outcome variables
+    std::vector<std::string> outcome_vars;
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Observed) {
+            // Check if Gaussian family
+            if (var.family.empty() || var.family == "gaussian") {
+                outcome_vars.push_back(var.name);
+            } else {
+                return false; // Non-Gaussian outcome
+            }
+        }
+    }
+
+    if (outcome_vars.size() < 2) {
+        return false; // Need at least 2 traits for multivariate
+    }
+
+    // Requirement 6: No latent variables (no SEM structure)
+    for (const auto& var : model.variables) {
+        if (var.kind == VariableKind::Latent) {
+            return false;
+        }
+    }
+
+    // Requirement 7: Random effect variables must match all outcome variables
+    if (random_effect.variables.size() != outcome_vars.size()) {
+        return false;
+    }
+
+    // Check that all outcomes are covered by the random effect
+    std::set<std::string> outcome_set(outcome_vars.begin(), outcome_vars.end());
+    std::set<std::string> re_var_set(random_effect.variables.begin(), random_effect.variables.end());
+    if (outcome_set != re_var_set) {
+        return false;
+    }
+
+    // If caller wants model info, populate it
+    if (info) {
+        info->kernel_id = cov_spec->id;
+        info->outcome_vars = outcome_vars;
+        info->random_effect_id = random_effect.id;
+        info->n_obs = cov_spec->dimension;
+        info->n_traits = outcome_vars.size();
+    }
+
+    return true;
+}
+
+double LikelihoodDriver::evaluate_multivariate_spectral_loglik(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    EstimationMethod method) const {
+
+    // Gather model information
+    MultivariateSpectralModelInfo info;
+    if (!is_multivariate_spectral_eligible(model, fixed_covariance_data, &info)) {
+        throw std::runtime_error("Model is not eligible for multivariate spectral decomposition");
+    }
+
+    const size_t d = info.n_traits;
+
+    // Extract observed outcome data as matrix Y (n × d)
+    size_t n = 0;
+    Eigen::MatrixXd Y;
+
+    for (size_t trait_idx = 0; trait_idx < d; ++trait_idx) {
+        auto y_it = data.find(info.outcome_vars[trait_idx]);
+        if (y_it == data.end()) {
+            throw std::runtime_error("Missing outcome data for variable: " + info.outcome_vars[trait_idx]);
+        }
+
+        if (trait_idx == 0) {
+            n = y_it->second.size();
+            Y.resize(n, d);
+        }
+
+        if (y_it->second.size() != n) {
+            throw std::runtime_error("Inconsistent sample sizes across traits");
+        }
+
+        Y.col(trait_idx) = Eigen::Map<const Eigen::VectorXd>(y_it->second.data(), n);
+    }
+
+    // Build fixed effects design matrix X from regression edges
+    // For simplicity, assume all traits share the same predictors
+    std::vector<std::string> predictor_vars;
+    for (const auto& edge : model.edges) {
+        if (edge.kind == EdgeKind::Regression && edge.target == info.outcome_vars[0]) {
+            predictor_vars.push_back(edge.source);
+        }
+    }
+
+    Eigen::MatrixXd X;
+    if (predictor_vars.empty()) {
+        // Intercept-only model
+        X = Eigen::MatrixXd::Ones(n, 1);
+    } else {
+        X.resize(n, predictor_vars.size());
+        for (size_t j = 0; j < predictor_vars.size(); ++j) {
+            auto pred_it = data.find(predictor_vars[j]);
+            if (pred_it == data.end()) {
+                throw std::runtime_error("Missing predictor data: " + predictor_vars[j]);
+            }
+            X.col(j) = Eigen::Map<const Eigen::VectorXd>(pred_it->second.data(), n);
+        }
+    }
+
+    // Extract genetic covariance matrix G (d × d) from covariance_parameters
+    // The random effect covariance should have d*(d+1)/2 parameters (unique elements of symmetric matrix)
+    // For now, assume the parameters are stored as flattened d×d matrix
+    auto cov_param_it = covariance_parameters.find(info.kernel_id);
+    if (cov_param_it == covariance_parameters.end() || cov_param_it->second.empty()) {
+        throw std::runtime_error("Missing covariance parameter for: " + info.kernel_id);
+    }
+
+    Eigen::MatrixXd G;
+    if (cov_param_it->second.size() == 1) {
+        // Scalar case: assume identity scaled by this value
+        G = cov_param_it->second[0] * Eigen::MatrixXd::Identity(d, d);
+    } else if (cov_param_it->second.size() == d * d) {
+        // Full matrix
+        G = Eigen::Map<const Eigen::MatrixXd>(cov_param_it->second.data(), d, d);
+    } else {
+        throw std::runtime_error("Genetic covariance matrix dimension mismatch");
+    }
+
+    // Extract residual covariance matrix R (d × d)
+    // For multivariate models, this should be stored under a specific key
+    std::string resid_cov_key = info.outcome_vars[0] + "_residual_covariance";
+    auto resid_param_it = covariance_parameters.find(resid_cov_key);
+
+    Eigen::MatrixXd R;
+    if (resid_param_it != covariance_parameters.end() && !resid_param_it->second.empty()) {
+        if (resid_param_it->second.size() == 1) {
+            // Scalar case: assume identity scaled by this value
+            R = resid_param_it->second[0] * Eigen::MatrixXd::Identity(d, d);
+        } else if (resid_param_it->second.size() == d * d) {
+            R = Eigen::Map<const Eigen::MatrixXd>(resid_param_it->second.data(), d, d);
+        } else {
+            throw std::runtime_error("Residual covariance matrix dimension mismatch");
+        }
+    } else {
+        // Default: identity matrix
+        R = Eigen::MatrixXd::Identity(d, d);
+    }
+
+    // Get kernel matrix
+    auto kernel_it = fixed_covariance_data.find(info.kernel_id);
+    if (kernel_it == fixed_covariance_data.end() || kernel_it->second.empty()) {
+        throw std::runtime_error("Missing kernel data for: " + info.kernel_id);
+    }
+
+    const auto& kernel_flat = kernel_it->second[0];
+    if (kernel_flat.size() != n * n) {
+        throw std::runtime_error("Kernel dimension mismatch");
+    }
+
+    Eigen::MatrixXd K = Eigen::Map<const Eigen::MatrixXd>(kernel_flat.data(), n, n);
+
+    // Create or reuse multivariate spectral evaluator (eigendecomposition is cached)
+    if (!multivariate_spectral_cache_ || multivariate_spectral_cache_->n_traits() != d) {
+        multivariate_spectral_cache_ = std::make_shared<MultivariateSpectralLikelihoodEvaluator>(K, d);
+    }
+
+    // Evaluate likelihood using multivariate spectral method
+    bool use_reml = (method == EstimationMethod::REML);
+    double loglik = multivariate_spectral_cache_->evaluate_loglik(Y, X, G, R, use_reml);
+
+    return loglik;
+}
+
+std::unordered_map<std::string, double> LikelihoodDriver::evaluate_multivariate_spectral_gradient(
+    const ModelIR& model,
+    const std::unordered_map<std::string, std::vector<double>>& data,
+    const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+    const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+    EstimationMethod method) const {
+
+    // Gather model information
+    MultivariateSpectralModelInfo info;
+    if (!is_multivariate_spectral_eligible(model, fixed_covariance_data, &info)) {
+        throw std::runtime_error("Model is not eligible for multivariate spectral decomposition");
+    }
+
+    const size_t d = info.n_traits;
+
+    // Extract observed outcome data as matrix Y (n × d)
+    size_t n = 0;
+    Eigen::MatrixXd Y;
+
+    for (size_t trait_idx = 0; trait_idx < d; ++trait_idx) {
+        auto y_it = data.find(info.outcome_vars[trait_idx]);
+        if (y_it == data.end()) {
+            throw std::runtime_error("Missing outcome data for variable: " + info.outcome_vars[trait_idx]);
+        }
+
+        if (trait_idx == 0) {
+            n = y_it->second.size();
+            Y.resize(n, d);
+        }
+
+        Y.col(trait_idx) = Eigen::Map<const Eigen::VectorXd>(y_it->second.data(), n);
+    }
+
+    // Build fixed effects design matrix X
+    std::vector<std::string> predictor_vars;
+    for (const auto& edge : model.edges) {
+        if (edge.kind == EdgeKind::Regression && edge.target == info.outcome_vars[0]) {
+            predictor_vars.push_back(edge.source);
+        }
+    }
+
+    Eigen::MatrixXd X;
+    if (predictor_vars.empty()) {
+        X = Eigen::MatrixXd::Ones(n, 1);
+    } else {
+        X.resize(n, predictor_vars.size());
+        for (size_t j = 0; j < predictor_vars.size(); ++j) {
+            auto pred_it = data.find(predictor_vars[j]);
+            if (pred_it == data.end()) {
+                throw std::runtime_error("Missing predictor data: " + predictor_vars[j]);
+            }
+            X.col(j) = Eigen::Map<const Eigen::VectorXd>(pred_it->second.data(), n);
+        }
+    }
+
+    // Extract covariance matrices
+    auto cov_param_it = covariance_parameters.find(info.kernel_id);
+    if (cov_param_it == covariance_parameters.end() || cov_param_it->second.empty()) {
+        throw std::runtime_error("Missing covariance parameter for: " + info.kernel_id);
+    }
+
+    Eigen::MatrixXd G;
+    if (cov_param_it->second.size() == 1) {
+        G = cov_param_it->second[0] * Eigen::MatrixXd::Identity(d, d);
+    } else if (cov_param_it->second.size() == d * d) {
+        G = Eigen::Map<const Eigen::MatrixXd>(cov_param_it->second.data(), d, d);
+    } else {
+        throw std::runtime_error("Genetic covariance matrix dimension mismatch");
+    }
+
+    std::string resid_cov_key = info.outcome_vars[0] + "_residual_covariance";
+    auto resid_param_it = covariance_parameters.find(resid_cov_key);
+
+    Eigen::MatrixXd R;
+    if (resid_param_it != covariance_parameters.end() && !resid_param_it->second.empty()) {
+        if (resid_param_it->second.size() == 1) {
+            R = resid_param_it->second[0] * Eigen::MatrixXd::Identity(d, d);
+        } else if (resid_param_it->second.size() == d * d) {
+            R = Eigen::Map<const Eigen::MatrixXd>(resid_param_it->second.data(), d, d);
+        } else {
+            throw std::runtime_error("Residual covariance matrix dimension mismatch");
+        }
+    } else {
+        R = Eigen::MatrixXd::Identity(d, d);
+    }
+
+    // Get kernel matrix
+    auto kernel_it = fixed_covariance_data.find(info.kernel_id);
+    if (kernel_it == fixed_covariance_data.end() || kernel_it->second.empty()) {
+        throw std::runtime_error("Missing kernel data for: " + info.kernel_id);
+    }
+
+    const auto& kernel_flat = kernel_it->second[0];
+    Eigen::MatrixXd K = Eigen::Map<const Eigen::MatrixXd>(kernel_flat.data(), n, n);
+
+    // Create or reuse multivariate spectral evaluator
+    if (!multivariate_spectral_cache_ || multivariate_spectral_cache_->n_traits() != d) {
+        multivariate_spectral_cache_ = std::make_shared<MultivariateSpectralLikelihoodEvaluator>(K, d);
+    }
+
+    // Evaluate gradient using multivariate spectral method
+    bool use_reml = (method == EstimationMethod::REML);
+    auto [grad_G_vec, grad_R_vec] = multivariate_spectral_cache_->evaluate_gradient(Y, X, G, R, use_reml);
+
+    // Map gradient to parameter names
+    std::unordered_map<std::string, double> gradient;
+
+    // Flatten G gradient
+    for (size_t i = 0; i < d * d; ++i) {
+        gradient[info.kernel_id + "_" + std::to_string(i)] = grad_G_vec(i);
+    }
+
+    // Flatten R gradient
+    for (size_t i = 0; i < d * d; ++i) {
+        gradient[resid_cov_key + "_" + std::to_string(i)] = grad_R_vec(i);
+    }
+
+    return gradient;
 }
 
 }  // namespace libsemx

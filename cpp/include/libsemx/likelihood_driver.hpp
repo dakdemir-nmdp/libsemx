@@ -3,6 +3,8 @@
 #include "libsemx/outcome_family.hpp"
 #include "libsemx/model_ir.hpp"
 #include "libsemx/optimizer.hpp"
+#include "libsemx/spectral_likelihood_evaluator.hpp"
+#include "libsemx/multivariate_spectral_likelihood_evaluator.hpp"
 
 #include <memory>
 #include <unordered_map>
@@ -152,6 +154,105 @@ public:
 private:
     // Cached Laplace system to avoid rebuilding block/group structure on every evaluation.
     mutable std::shared_ptr<void> laplace_cache_;
+
+    // Cached spectral evaluator for eligible models (GBLUP/GWAS with dense kernels)
+    mutable std::shared_ptr<SpectralLikelihoodEvaluator> spectral_cache_;
+
+    // Cached multivariate spectral evaluator for eligible multi-trait models
+    mutable std::shared_ptr<MultivariateSpectralLikelihoodEvaluator> multivariate_spectral_cache_;
+
+    // Helper structure to hold spectral model information
+    struct SpectralModelInfo {
+        std::string kernel_id;           // ID of the genomic kernel covariance
+        std::string outcome_var;         // Name of the outcome variable
+        std::string random_effect_id;    // ID of the random effect
+        double lambda;                   // Shrinkage parameter for the random effect
+        size_t n_obs;                    // Number of observations
+        Eigen::MatrixXd X_fixed;         // Fixed effects design matrix
+        Eigen::VectorXd y_obs;           // Observed outcomes
+    };
+
+    // Helper structure to hold multivariate spectral model information
+    struct MultivariateSpectralModelInfo {
+        std::string kernel_id;                    // ID of the genomic kernel covariance
+        std::vector<std::string> outcome_vars;    // Names of the outcome variables
+        std::string random_effect_id;             // ID of the random effect
+        double lambda;                            // Shrinkage parameter for the random effect
+        size_t n_obs;                             // Number of observations
+        size_t n_traits;                          // Number of traits
+        Eigen::MatrixXd X_fixed;                  // Fixed effects design matrix (n × p)
+        Eigen::MatrixXd Y_obs;                    // Observed outcomes (n × d)
+    };
+
+    /**
+     * Checks if a model is eligible for spectral decomposition optimization.
+     *
+     * Eligible models must have:
+     * - Single Gaussian outcome
+     * - Single random effect with genomic/scaled_fixed covariance
+     * - Simple covariance structure (V = σ²_g K + σ²_e I)
+     * - No complex SEM structure or latent variables
+     */
+    [[nodiscard]] bool is_spectral_eligible(
+        const ModelIR& model,
+        const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+        SpectralModelInfo* info = nullptr) const;
+
+    /**
+     * Evaluates log-likelihood using spectral decomposition for eligible models.
+     * Much faster than general-purpose solver for dense kernel models (O(n) vs O(n³)).
+     */
+    [[nodiscard]] double evaluate_spectral_loglik(
+        const ModelIR& model,
+        const std::unordered_map<std::string, std::vector<double>>& data,
+        const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+        const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+        EstimationMethod method) const;
+
+    /**
+     * Evaluates gradient using spectral decomposition for eligible models.
+     */
+    [[nodiscard]] std::unordered_map<std::string, double> evaluate_spectral_gradient(
+        const ModelIR& model,
+        const std::unordered_map<std::string, std::vector<double>>& data,
+        const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+        const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+        EstimationMethod method) const;
+
+    /**
+     * Checks if a model is eligible for multivariate spectral decomposition optimization.
+     *
+     * Eligible models must have:
+     * - Multiple Gaussian outcomes sharing the same random effect
+     * - Single random effect with genomic/scaled_fixed covariance
+     * - Multivariate covariance structure (Cov = G ⊗ K + R ⊗ I)
+     * - No complex SEM structure or latent variables
+     */
+    [[nodiscard]] bool is_multivariate_spectral_eligible(
+        const ModelIR& model,
+        const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+        MultivariateSpectralModelInfo* info = nullptr) const;
+
+    /**
+     * Evaluates log-likelihood using multivariate spectral decomposition for eligible models.
+     * Much faster than general-purpose solver for dense kernel multi-trait models.
+     */
+    [[nodiscard]] double evaluate_multivariate_spectral_loglik(
+        const ModelIR& model,
+        const std::unordered_map<std::string, std::vector<double>>& data,
+        const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+        const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+        EstimationMethod method) const;
+
+    /**
+     * Evaluates gradient using multivariate spectral decomposition for eligible models.
+     */
+    [[nodiscard]] std::unordered_map<std::string, double> evaluate_multivariate_spectral_gradient(
+        const ModelIR& model,
+        const std::unordered_map<std::string, std::vector<double>>& data,
+        const std::unordered_map<std::string, std::vector<double>>& covariance_parameters,
+        const std::unordered_map<std::string, std::vector<std::vector<double>>>& fixed_covariance_data,
+        EstimationMethod method) const;
 };
 
 }  // namespace libsemx

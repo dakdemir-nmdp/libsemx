@@ -3,13 +3,14 @@ library(lme4)
 library(testthat)
 
 # Helpers -------------------------------------------------------------
+# IMPORTANT: C++ uses tanh() transformation for correlation parameters
 positive_to_corr <- function(val) {
-  (val - 1) / (val + 1)
+  tanh(val)
 }
 
 corr_to_positive <- function(rho) {
   stopifnot(abs(rho) < 1)
-  (1 + rho) / (1 - rho)
+  atanh(rho)
 }
 
 get_named_params <- function(fit) {
@@ -20,10 +21,12 @@ get_named_params <- function(fit) {
   params
 }
 
-opts <- new(OptimizationOptions)
-opts$max_iterations <- 400
-opts$tolerance <- 1e-5
-opts$max_linesearch <- 10
+# Optimization options (deprecated - now uses defaults)
+# opts <- new(OptimizationOptions)
+# opts$max_iterations <- 400
+# opts$tolerance <- 1e-5
+# opts$max_linesearch <- 10
+opts <- NULL
 
 # simple capture utility for summaries
 capture_row <- function(tag, metrics) {

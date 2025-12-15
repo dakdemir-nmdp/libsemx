@@ -44,6 +44,10 @@ add_library(libsemx STATIC
     src/libsemx/model_objective.cpp
     src/libsemx/outcome_family_factory.cpp
     src/libsemx/post_estimation.cpp
+    src/libsemx/spectral_likelihood_evaluator.cpp
+    src/libsemx/multivariate_spectral_likelihood_evaluator.cpp
+    src/libsemx/average_information_optimizer.cpp
+    src/libsemx/mom_solver.cpp
 )
 
 target_include_directories(libsemx
@@ -143,6 +147,13 @@ add_executable(libsemx_tests
     tests/survival_comparison_tests.cpp
     tests/multi_group_tests.cpp
     tests/sparse_likelihood_tests.cpp
+    tests/spectral_likelihood_tests.cpp
+    tests/spectral_integration_tests.cpp
+    tests/multivariate_spectral_likelihood_tests.cpp
+    tests/average_information_optimizer_tests.cpp
+    tests/mom_solver_tests.cpp
+    tests/expanded_covariance_tests.cpp
+    tests/shrinkage_tests.cpp
 )
 
 target_link_libraries(libsemx_tests

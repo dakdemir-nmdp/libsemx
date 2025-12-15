@@ -55,7 +55,8 @@ build_semx_ir <- function(variables, edges, covariances, random_effects, paramet
 
     if (!is.null(random_effects)) {
         for (re in random_effects) {
-            builder$add_random_effect(re$name, re$variables, re$covariance)
+            lambda <- if (!is.null(re$lambda)) re$lambda else 1.0
+            builder$add_random_effect(re$name, re$variables, re$covariance, lambda)
         }
     }
 

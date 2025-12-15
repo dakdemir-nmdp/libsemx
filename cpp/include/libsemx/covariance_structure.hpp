@@ -143,4 +143,54 @@ private:
     std::size_t rank_;
 };
 
+class ARMA11Covariance final : public CovarianceStructure {
+public:
+    explicit ARMA11Covariance(std::size_t dimension);
+
+    [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
+
+protected:
+    void fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const override;
+
+    void validate_parameters(const std::vector<double>& parameters) const override;
+};
+
+class RBFKernel final : public CovarianceStructure {
+public:
+    RBFKernel(const std::vector<double>& coordinates, std::size_t dimension);
+
+    [[nodiscard]] const std::vector<double>& coordinates() const noexcept { return coordinates_; }
+
+    [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
+
+protected:
+    void fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const override;
+
+    void validate_parameters(const std::vector<double>& parameters) const override;
+
+private:
+    std::vector<double> coordinates_;  // n x d coordinate matrix stored row-major
+    std::vector<double> distance_matrix_;  // Precomputed pairwise distances
+    void precompute_distances();
+};
+
+class ExponentialKernel final : public CovarianceStructure {
+public:
+    ExponentialKernel(const std::vector<double>& coordinates, std::size_t dimension);
+
+    [[nodiscard]] const std::vector<double>& coordinates() const noexcept { return coordinates_; }
+
+    [[nodiscard]] std::vector<std::vector<double>> parameter_gradients(const std::vector<double>& parameters) const override;
+
+protected:
+    void fill_covariance(const std::vector<double>& parameters, std::vector<double>& matrix) const override;
+
+    void validate_parameters(const std::vector<double>& parameters) const override;
+
+private:
+    std::vector<double> coordinates_;  // n x d coordinate matrix stored row-major
+    std::vector<double> distance_matrix_;  // Precomputed pairwise distances
+    void precompute_distances();
+};
+
 }  // namespace libsemx

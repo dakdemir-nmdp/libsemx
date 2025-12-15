@@ -12,6 +12,54 @@
 *   **Missing Data**: Full Information Maximum Likelihood (FIML) support.
 *   **Multi-Group Analysis**: Support for multiple groups with parameter constraints.
 
+## Installation
+
+### Prerequisites
+
+*   **C++ compiler** with C++20 support
+*   **CMake** (for building the C++ core)
+*   **Eigen library** (automatically fetched by CMake)
+*   **pybind11** (for Python bindings, automatically fetched by CMake)
+*   **Python ≥ 3.9** (for Python front-end)
+*   **R** with Rcpp and RcppEigen (for R front-end)
+
+### Python Installation
+
+From the repository root:
+
+```bash
+# 1. Build the C++ library
+mkdir -p build && cd build
+cmake ../cpp
+make
+cd ..
+
+# 2. Install the Python package (development mode)
+cd python
+pip install -e .
+```
+
+Or for a regular installation:
+
+```bash
+cd python
+pip install .
+```
+
+### R Installation
+
+From R:
+
+```R
+install.packages("Rpkg/semx", repos = NULL, type = "source")
+```
+
+Or from the command line:
+
+```bash
+R CMD INSTALL Rpkg/semx
+```
+
 ## Structure
 
 *   `cpp/`: Core C++ library and tests.

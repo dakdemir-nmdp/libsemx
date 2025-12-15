@@ -96,7 +96,7 @@ void ModelGraph::add_covariance(std::string id, std::string structure, std::size
     covariances_.push_back(CovarianceSpec{std::move(id), std::move(structure), dimension, std::move(components)});
 }
 
-void ModelGraph::add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id) {
+void ModelGraph::add_random_effect(std::string id, std::vector<std::string> variables, std::string covariance_id, double lambda) {
     if (id.empty()) {
         throw std::invalid_argument("random effect id must be non-empty");
     }
@@ -105,6 +105,9 @@ void ModelGraph::add_random_effect(std::string id, std::vector<std::string> vari
     }
     if (covariance_id.empty()) {
         throw std::invalid_argument("random effect covariance id must be non-empty");
+    }
+    if (lambda <= 0.0) {
+        throw std::invalid_argument("lambda must be positive");
     }
     std::unordered_set<std::string> seen;
     seen.reserve(variables.size());
@@ -119,7 +122,7 @@ void ModelGraph::add_random_effect(std::string id, std::vector<std::string> vari
     if (!covariance_index_.contains(covariance_id)) {
         throw std::invalid_argument("random effect references unknown covariance id: " + covariance_id);
     }
-    random_effects_.push_back(RandomEffectSpec{std::move(id), std::move(variables), std::move(covariance_id)});
+    random_effects_.push_back(RandomEffectSpec{std::move(id), std::move(variables), std::move(covariance_id), lambda});
 }
 
 void ModelGraph::register_parameter(std::string id,
