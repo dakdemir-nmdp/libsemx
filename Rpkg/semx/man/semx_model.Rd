@@ -11,6 +11,7 @@ semx_model(
   covariances = NULL,
   genomic = NULL,
   random_effects = NULL,
+  parameters = NULL,
   data = NULL
 )
 }
@@ -29,6 +30,8 @@ family identifiers such as ``gaussian`` or ``binomial``.}
 a numeric matrix `markers` and optional `structure`, `center`, and `normalize` flags.}
 
 \item{random_effects}{Optional list of random effect definitions (name, variables, covariance).}
+
+\item{parameters}{Optional named list of initial values for parameters.}
 
 \item{data}{Optional list or data.frame containing data. If provided, it can be used to resolve
 genomic matrices referenced in `genomic` specs or equations.}

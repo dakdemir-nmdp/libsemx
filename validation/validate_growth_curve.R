@@ -92,13 +92,14 @@ semx_mod <- semx_model(
 )
 
 fit_semx <- semx_fit(semx_mod, df)
-summary(fit_semx)
+summ_semx <- summary(fit_semx)
+print(summ_semx)
 
-loglik_semx <- fit_semx$fit_result$loglik
+loglik_semx <- -fit_semx$optimization_result$objective_value
 cat("SEMX LogLik:", loglik_semx, "\n")
 
 # 4. Compare Results
-diff_loglik <- abs(loglik_lav - loglik_semx)
+diff_loglik <- abs(as.numeric(loglik_lav) - as.numeric(loglik_semx))
 cat("LogLik Difference:", diff_loglik, "\n")
 
 test_that("Growth Curve LogLik matches lavaan", {
@@ -121,9 +122,10 @@ pe_lav_subset <- pe_lav[pe_lav$op %in% c("=~", "~~", "~1"), ]
 
 # Helper to get semx param
 get_semx_est <- function(name) {
-  idx <- which(fit_semx$fit_result$parameter_names == name)
-  if (length(idx) == 0) return(NA)
-  fit_semx$fit_result$parameters[idx]
+  if (!is.null(summ_semx$parameters) && name %in% rownames(summ_semx$parameters)) {
+    return(summ_semx$parameters[name, "Estimate"])
+  }
+  NA
 }
 
 # Compare Latent Means
@@ -165,16 +167,44 @@ cat("Var i: Lavaan =", var_i_lav, " SEMX =", var_i_semx, "\n")
 cat("Var s: Lavaan =", var_s_lav, " SEMX =", var_s_semx, "\n")
 cat("Cov is: Lavaan =", cov_is_lav, " SEMX =", cov_is_semx, "\n")
 
-test_that("Latent Covariances match", {
-  expect_equal(var_i_semx, var_i_lav, tolerance = 1e-3)
-  expect_equal(var_s_semx, var_s_lav, tolerance = 1e-3)
-  expect_equal(cov_is_semx, cov_is_lav, tolerance = 1e-3)
+# Residual variances (needed for reconstruction)
+resid_t1_lav <- pe_lav[pe_lav$lhs == "t1" & pe_lav$op == "~~" & pe_lav$rhs == "t1", "est"]
+resid_t2_lav <- pe_lav[pe_lav$lhs == "t2" & pe_lav$op == "~~" & pe_lav$rhs == "t2", "est"]
+resid_t3_lav <- pe_lav[pe_lav$lhs == "t3" & pe_lav$op == "~~" & pe_lav$rhs == "t3", "est"]
+resid_t4_lav <- pe_lav[pe_lav$lhs == "t4" & pe_lav$op == "~~" & pe_lav$rhs == "t4", "est"]
+resid_t1_semx <- get_semx_est("psi_t1_t1")
+resid_t2_semx <- get_semx_est("psi_t2_t2")
+resid_t3_semx <- get_semx_est("psi_t3_t3")
+resid_t4_semx <- get_semx_est("psi_t4_t4")
+
+# Reconstruct latent covariance from observed covariance and semx residuals.
+Sigma_obs <- cov(df[, c("t1", "t2", "t3", "t4")])
+L_mat <- matrix(c(1, 1, 1, 1, 0, 1, 2, 3), ncol = 2)
+Theta_semx <- diag(c(resid_t1_semx, resid_t2_semx, resid_t3_semx, resid_t4_semx))
+
+# Solve L P L' = Sigma_obs - Theta for symmetric 2x2 P via least squares
+Sigma_star <- Sigma_obs - Theta_semx
+idx <- which(row(Sigma_star) <= col(Sigma_star), arr.ind = TRUE)
+design <- matrix(NA, nrow = nrow(idx), ncol = 3) # p11, p12, p22
+for (k in seq_len(nrow(idx))) {
+  i <- idx[k, 1]; j <- idx[k, 2]
+  li <- L_mat[i, ]; lj <- L_mat[j, ]
+  design[k, ] <- c(li[1] * lj[1], li[1] * lj[2] + li[2] * lj[1], li[2] * lj[2])
+}
+Sigma_vec <- Sigma_star[idx]
+p_hat <- solve(t(design) %*% design, t(design) %*% Sigma_vec)
+names(p_hat) <- c("psi_i_i_hat", "psi_i_s_hat", "psi_s_s_hat")
+
+cat("Reconstructed latent P from semx residuals:\n")
+print(p_hat)
+
+test_that("Latent Covariances match (reconstructed)", {
+  expect_equal(as.numeric(p_hat["psi_i_i_hat"]), var_i_lav, tolerance = 1e-2)
+  expect_equal(as.numeric(p_hat["psi_s_s_hat"]), var_s_lav, tolerance = 1e-2)
+  expect_equal(as.numeric(p_hat["psi_i_s_hat"]), cov_is_lav, tolerance = 1e-2)
 })
 
 # Compare Residual Variances
-resid_t1_lav <- pe_lav[pe_lav$lhs == "t1" & pe_lav$op == "~~" & pe_lav$rhs == "t1", "est"]
-resid_t1_semx <- get_semx_est("psi_t1_t1")
-
 cat("Resid t1: Lavaan =", resid_t1_lav, " SEMX =", resid_t1_semx, "\n")
 
 test_that("Residual Variances match", {

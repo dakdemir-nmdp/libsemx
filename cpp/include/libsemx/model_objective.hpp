@@ -59,6 +59,19 @@ private:
 
     void update_sem_data(const std::vector<double>& constrained_parameters) const;
 
+    // Helper methods to reduce duplication in SEM mode
+    void build_sem_workspaces(const std::vector<double>& constrained,
+                             std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+                             std::unordered_map<std::string, std::vector<double>>& dispersions,
+                             std::unordered_map<std::string, std::vector<double>>& covariance_parameters) const;
+
+    void prepare_sem_status_and_extra_params(const std::vector<double>& constrained,
+                                            std::unordered_map<std::string, std::vector<double>>& status,
+                                            std::unordered_map<std::string, std::vector<double>>& extra_params) const;
+
+    void build_sem_gradient_mappings(std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>& data_param_mappings,
+                                     std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>& dispersion_param_mappings) const;
+
     const LikelihoodDriver& driver_;
     const ModelIR& model_;
     const std::unordered_map<std::string, std::vector<double>>& data_;

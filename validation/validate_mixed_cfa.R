@@ -83,11 +83,7 @@ semx_mod$parameters[["lambda_y2_on_f1"]] <- 1.0
 semx_mod$parameters[["lambda_u1_on_f1"]] <- 1.0
 semx_mod$parameters[["lambda_u2_on_f1"]] <- 1.0
 
-opts <- new(OptimizationOptions)
-opts$max_iterations <- 5000
-opts$tolerance <- 1e-5
-
-fit_semx <- semx_fit(semx_mod, df, options = opts)
+fit_semx <- semx_fit(semx_mod, df)
 print(summary(fit_semx))
 
 # 4. Compare

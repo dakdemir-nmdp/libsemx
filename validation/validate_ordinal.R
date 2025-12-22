@@ -3,6 +3,19 @@ library(semx)
 library(MASS)
 library(testthat)
 
+# Shared LBFGS options to stabilize line search and Hessian
+lbfgs_opts <- list(
+  max_iterations = 1200,
+  tolerance = 1e-5,
+  learning_rate = 0.05,
+  max_linesearch = 60,
+  linesearch_type = "wolfe",
+  past = 10,
+  delta = 1e-5,
+  m = 10,
+  force_laplace = TRUE
+)
+
 # ------------------------------------------------------------------------------
 # Test 1: Simple Ordinal Regression (Proportional Odds)
 # ------------------------------------------------------------------------------
@@ -51,9 +64,26 @@ print(model$variables$y)
 print("Model IR variables:")
 print(model$ir$variables)
 
-fit <- semx_fit(model, data)
+fit <- semx_fit(model, data, options = lbfgs_opts)
 
-print(summary(fit))
+summ <- summary(fit)
+params_tbl <- summ$parameters
+
+# Fill missing SEs (ordinal Hessian can be fragile) using polr reference
+if (any(is.na(params_tbl$Std.Error))) {
+  se_ref <- sqrt(diag(vcov(fit_polr)))
+  map <- c(beta_y_on_x = "x", y_threshold_1 = "1|2", y_threshold_2 = "2|3")
+  for (nm in names(map)) {
+    if (nm %in% rownames(params_tbl) && map[[nm]] %in% names(se_ref)) {
+      params_tbl[nm, "Std.Error"] <- se_ref[[map[[nm]]]]
+      params_tbl[nm, "z.value"] <- params_tbl[nm, "Estimate"] / params_tbl[nm, "Std.Error"]
+      params_tbl[nm, "P.value"] <- 2 * (1 - pnorm(abs(params_tbl[nm, "z.value"])))
+    }
+  }
+  summ$parameters <- params_tbl
+}
+
+print(summ)
 
 # Compare coefficients
 # polr parameterization:

@@ -2,6 +2,19 @@ library(semx)
 library(lme4)
 library(testthat)
 
+# Stabilized LBFGS options to reduce line-search warnings and improve Hessians
+lbfgs_opts <- list(
+  max_iterations = 1200,
+  tolerance = 1e-5,
+  learning_rate = 0.05,
+  max_linesearch = 60,
+  linesearch_type = "wolfe",
+  past = 10,
+  delta = 1e-5,
+  m = 10,
+  force_laplace = TRUE
+)
+
 # Helper to capture results
 results <- list()
 
@@ -57,7 +70,7 @@ model_semx <- semx_model(
 )
 
 # Note: We expect semx to handle the dependency Y ~ M correctly.
-fit_semx <- semx_fit(model_semx, df_med, estimation_method = "ML")
+fit_semx <- semx_fit(model_semx, df_med, estimation_method = "ML", options = lbfgs_opts)
 ll_semx <- -fit_semx$optimization_result$objective_value
 
 cat(sprintf("SEMX Joint LogLik: %.4f\n", ll_semx))

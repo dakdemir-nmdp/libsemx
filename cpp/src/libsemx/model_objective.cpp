@@ -171,6 +171,10 @@ ModelObjective::ModelObjective(const LikelihoodDriver& driver,
         if (mask.size() < count) {
             mask.resize(count, false);
         }
+        
+        // TODO: Improve covariance parameter initialization with data-driven heuristics
+        // For now, use default initialization to maintain stability
+        // Future improvement: Use outcome variance estimates to initialize variance components
         for (size_t i = 0; i < count; ++i) {
             std::string param_name = cov.id + "_" + std::to_string(i);
             bool positive = mask[i];
@@ -198,99 +202,11 @@ double ModelObjective::value(const std::vector<double>& parameters) const {
         std::unordered_map<std::string, std::vector<double>> dispersions;
         std::unordered_map<std::string, std::vector<double>> covariance_parameters;
         
-        // 1. Linear Predictors (Fixed Effects)
-        auto& lp = linear_predictors["_stacked_y"];
-        lp.assign(sem_data_.at("_stacked_y").size(), 0.0);
+        build_sem_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
         
-        size_t n_obs = data_.at(sem_outcomes_[0]).size();
-        size_t n_outcomes = sem_outcomes_.size();
-        size_t total_rows = n_obs * n_outcomes;
-
-        // In SEM mode, fixed effects are handled via sem_model_.edges (mapped to _stacked_y)
-        // We do NOT iterate model_.edges here to avoid double counting.
-        
-        // Handle SEM-specific regression edges (e.g. latent means and mapped fixed effects)
-        for (const auto& edge : sem_model_.edges) {
-            if (edge.kind == EdgeKind::Regression && edge.target == "_stacked_y") {
-                double weight = 0.0;
-                if (!edge.parameter_id.empty()) {
-                    size_t idx = catalog_.find_index(edge.parameter_id);
-                    if (idx != ParameterCatalog::npos) {
-                        weight = constrained[idx];
-                    } else {
-                        try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                    }
-                } else {
-                    try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                }
-
-                if (sem_data_.count(edge.source)) {
-                    const auto& src_vec = sem_data_.at(edge.source);
-                    if (src_vec.size() == lp.size()) {
-                        for(size_t i=0; i<src_vec.size(); ++i) {
-                            lp[i] += src_vec[i] * weight;
-                        }
-                    }
-                }
-            }
-        }
-        std::vector<double> disp(total_rows, 1.0);
-        for (const auto& info : residual_infos_) {
-            double val = info.fixed_value;
-            if (info.param_index != ParameterCatalog::npos) {
-                val = constrained[info.param_index];
-            }
-            for (size_t i = 0; i < n_obs; ++i) {
-                disp[i * n_outcomes + info.outcome_index] = val;
-            }
-        }
-        dispersions["_stacked_y"] = std::move(disp);
-        
-        // 3. Covariance Parameters
-        // Standard ranges (if any)
-        for (const auto& [id, range] : covariance_param_ranges_) {
-            std::vector<double> params;
-            params.reserve(range.second);
-            for (size_t i = 0; i < range.second; ++i) {
-                params.push_back(constrained[range.first + i]);
-            }
-            covariance_parameters[id] = std::move(params);
-        }
-        // SEM mappings
-        for (const auto& mapping : sem_covariance_mappings_) {
-            std::vector<double> params;
-            params.reserve(mapping.elements.size());
-            for (const auto& elem : mapping.elements) {
-                if (elem.param_index != ParameterCatalog::npos) {
-                    params.push_back(constrained[elem.param_index]);
-                } else {
-                    params.push_back(elem.fixed_value);
-                }
-            }
-            covariance_parameters[mapping.id] = std::move(params);
-        }
-        
-        // Prepare status and extra_params for _stacked_y
-        auto local_status = status_;
-        if (sem_data_.count("_stacked_item_idx")) {
-            local_status["_stacked_y"] = sem_data_.at("_stacked_item_idx");
-        }
-
-        auto local_extra_params = build_extra_params(constrained);
-        if (extra_param_mappings_.count("_stacked_y")) {
-            const auto& param_ids = extra_param_mappings_.at("_stacked_y");
-            std::vector<double> stacked_ep;
-            stacked_ep.reserve(param_ids.size());
-            for (const auto& pid : param_ids) {
-                size_t idx = catalog_.find_index(pid);
-                if (idx != ParameterCatalog::npos) {
-                    stacked_ep.push_back(constrained[idx]);
-                } else {
-                    try { stacked_ep.push_back(std::stod(pid)); } catch(...) { stacked_ep.push_back(0.0); }
-                }
-            }
-            local_extra_params["_stacked_y"] = std::move(stacked_ep);
-        }
+        std::unordered_map<std::string, std::vector<double>> local_status;
+        std::unordered_map<std::string, std::vector<double>> local_extra_params;
+        prepare_sem_status_and_extra_params(constrained, local_status, local_extra_params);
 
         try {
             double ll = -driver_.evaluate_model_loglik(sem_model_, sem_data_, linear_predictors, dispersions, covariance_parameters, local_status, local_extra_params, fixed_covariance_data_, method_, force_laplace_);
@@ -331,109 +247,12 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
         std::unordered_map<std::string, std::vector<double>> dispersions;
         std::unordered_map<std::string, std::vector<double>> covariance_parameters;
         
-        // 1. Linear Predictors (Fixed Effects)
-        auto& lp = linear_predictors["_stacked_y"];
-        lp.assign(sem_data_.at("_stacked_y").size(), 0.0);
-        
-        size_t n_obs = data_.at(sem_outcomes_[0]).size();
-        size_t n_outcomes = sem_outcomes_.size();
-        size_t total_rows = n_obs * n_outcomes;
-
-        // In SEM mode, fixed effects are handled via sem_model_.edges (mapped to _stacked_y)
-        // We do NOT iterate model_.edges here to avoid double counting.
-
-        // Handle SEM-specific regression edges (e.g. latent means and mapped fixed effects)
-        for (const auto& edge : sem_model_.edges) {
-            if (edge.kind == EdgeKind::Regression && edge.target == "_stacked_y") {
-                double weight = 0.0;
-                if (!edge.parameter_id.empty()) {
-                    size_t idx = catalog_.find_index(edge.parameter_id);
-                    if (idx != ParameterCatalog::npos) {
-                        weight = constrained[idx];
-                    } else {
-                        try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                    }
-                } else {
-                    try { weight = std::stod(edge.parameter_id); } catch(...) {}
-                }
-
-                if (sem_data_.count(edge.source)) {
-                    const auto& src_vec = sem_data_.at(edge.source);
-                    if (src_vec.size() == lp.size()) {
-                        for(size_t i=0; i<src_vec.size(); ++i) {
-                            lp[i] += src_vec[i] * weight;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 2. Dispersions
-        std::vector<double> disp(total_rows, 1.0);
-        for (const auto& info : residual_infos_) {
-            double val = info.fixed_value;
-            if (info.param_index != ParameterCatalog::npos) {
-                val = constrained[info.param_index];
-            }
-            for (size_t i = 0; i < n_obs; ++i) {
-                disp[i * n_outcomes + info.outcome_index] = val;
-            }
-        }
-        dispersions["_stacked_y"] = std::move(disp);
-        
-        // 3. Covariance Parameters
-        for (const auto& [id, range] : covariance_param_ranges_) {
-            std::vector<double> params;
-            params.reserve(range.second);
-            for (size_t i = 0; i < range.second; ++i) {
-                params.push_back(constrained[range.first + i]);
-            }
-            covariance_parameters[id] = std::move(params);
-        }
-        for (const auto& mapping : sem_covariance_mappings_) {
-            std::vector<double> params;
-            params.reserve(mapping.elements.size());
-            for (const auto& elem : mapping.elements) {
-                if (elem.param_index != ParameterCatalog::npos) {
-                    params.push_back(constrained[elem.param_index]);
-                } else {
-                    params.push_back(elem.fixed_value);
-                }
-            }
-            covariance_parameters[mapping.id] = std::move(params);
-        }
+        build_sem_workspaces(constrained, linear_predictors, dispersions, covariance_parameters);
         
         // Construct data_param_mappings for loadings
         std::unordered_map<std::string, LikelihoodDriver::DataParamMapping> data_param_mappings;
-        
-        // Initialize mappings for all loading variables
-        for(const auto& latent : sem_latents_) {
-            std::string loading_var = "_loading_" + latent;
-            LikelihoodDriver::DataParamMapping mapping;
-            mapping.stride = n_outcomes;
-            mapping.pattern.resize(n_outcomes);
-            data_param_mappings[loading_var] = mapping;
-        }
-        
-        // Fill patterns
-        for (const auto& info : loading_infos_) {
-            if (info.param_index != ParameterCatalog::npos) {
-                std::string loading_var = "_loading_" + sem_latents_[info.latent_index];
-                std::string param_id = catalog_.names()[info.param_index];
-                data_param_mappings[loading_var].pattern[info.outcome_index] = param_id;
-            }
-        }
-        
-        // Build dispersion mappings for analytic gradients
         std::unordered_map<std::string, LikelihoodDriver::DataParamMapping> dispersion_param_mappings;
-        
-        std::vector<std::string> pattern(sem_outcomes_.size());
-        for (const auto& info : residual_infos_) {
-            if (info.param_index != ParameterCatalog::npos) {
-                pattern[info.outcome_index] = catalog_.names()[info.param_index];
-            }
-        }
-        dispersion_param_mappings["_stacked_y"] = LikelihoodDriver::DataParamMapping{pattern, sem_outcomes_.size()};
+        build_sem_gradient_mappings(data_param_mappings, dispersion_param_mappings);
 
         std::pair<double, std::unordered_map<std::string, double>> value_and_grad;
         try {
@@ -442,26 +261,9 @@ double ModelObjective::value_and_gradient(const std::vector<double>& parameters,
                 mappings[k] = v;
             }
 
-            std::unordered_map<std::string, std::vector<double>> sem_status = status_;
-            if (sem_mode_ && sem_data_.count("_stacked_item_idx")) {
-                sem_status["_stacked_y"] = sem_data_.at("_stacked_item_idx");
-            }
-
-            auto local_extra_params = build_extra_params(constrained);
-            if (extra_param_mappings_.count("_stacked_y")) {
-                const auto& param_ids = extra_param_mappings_.at("_stacked_y");
-                std::vector<double> stacked_ep;
-                stacked_ep.reserve(param_ids.size());
-                for (const auto& pid : param_ids) {
-                    size_t idx = catalog_.find_index(pid);
-                    if (idx != ParameterCatalog::npos) {
-                        stacked_ep.push_back(constrained[idx]);
-                    } else {
-                        try { stacked_ep.push_back(std::stod(pid)); } catch(...) { stacked_ep.push_back(0.0); }
-                    }
-                }
-                local_extra_params["_stacked_y"] = std::move(stacked_ep);
-            }
+            std::unordered_map<std::string, std::vector<double>> sem_status;
+            std::unordered_map<std::string, std::vector<double>> local_extra_params;
+            prepare_sem_status_and_extra_params(constrained, sem_status, local_extra_params);
 
             value_and_grad = driver_.evaluate_model_loglik_and_gradient(
                 sem_model_,
@@ -1167,6 +969,145 @@ std::unordered_map<std::string, std::vector<std::string>> ModelObjective::build_
         }
     }
     return mappings;
+}
+
+void ModelObjective::build_sem_workspaces(const std::vector<double>& constrained,
+                                         std::unordered_map<std::string, std::vector<double>>& linear_predictors,
+                                         std::unordered_map<std::string, std::vector<double>>& dispersions,
+                                         std::unordered_map<std::string, std::vector<double>>& covariance_parameters) const {
+    // 1. Linear Predictors (Fixed Effects)
+    auto& lp = linear_predictors["_stacked_y"];
+    lp.assign(sem_data_.at("_stacked_y").size(), 0.0);
+    
+    size_t n_obs = data_.at(sem_outcomes_[0]).size();
+    size_t n_outcomes = sem_outcomes_.size();
+    size_t total_rows = n_obs * n_outcomes;
+
+    // In SEM mode, fixed effects are handled via sem_model_.edges (mapped to _stacked_y)
+    // We do NOT iterate model_.edges here to avoid double counting.
+    
+    // Handle SEM-specific regression edges (e.g. latent means and mapped fixed effects)
+    for (const auto& edge : sem_model_.edges) {
+        if (edge.kind == EdgeKind::Regression && edge.target == "_stacked_y") {
+            double weight = 0.0;
+            if (!edge.parameter_id.empty()) {
+                size_t idx = catalog_.find_index(edge.parameter_id);
+                if (idx != ParameterCatalog::npos) {
+                    weight = constrained[idx];
+                } else {
+                    try { weight = std::stod(edge.parameter_id); } catch(...) {}
+                }
+            } else {
+                try { weight = std::stod(edge.parameter_id); } catch(...) {}
+            }
+
+            if (sem_data_.count(edge.source)) {
+                const auto& src_vec = sem_data_.at(edge.source);
+                if (src_vec.size() == lp.size()) {
+                    for(size_t i=0; i<src_vec.size(); ++i) {
+                        lp[i] += src_vec[i] * weight;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 2. Dispersions
+    std::vector<double> disp(total_rows, 1.0);
+    for (const auto& info : residual_infos_) {
+        double val = info.fixed_value;
+        if (info.param_index != ParameterCatalog::npos) {
+            val = constrained[info.param_index];
+        }
+        for (size_t i = 0; i < n_obs; ++i) {
+            disp[i * n_outcomes + info.outcome_index] = val;
+        }
+    }
+    dispersions["_stacked_y"] = std::move(disp);
+    
+    // 3. Covariance Parameters
+    // Standard ranges (if any)
+    for (const auto& [id, range] : covariance_param_ranges_) {
+        std::vector<double> params;
+        params.reserve(range.second);
+        for (size_t i = 0; i < range.second; ++i) {
+            params.push_back(constrained[range.first + i]);
+        }
+        covariance_parameters[id] = std::move(params);
+    }
+    // SEM mappings
+    for (const auto& mapping : sem_covariance_mappings_) {
+        std::vector<double> params;
+        params.reserve(mapping.elements.size());
+        for (const auto& elem : mapping.elements) {
+            if (elem.param_index != ParameterCatalog::npos) {
+                params.push_back(constrained[elem.param_index]);
+            } else {
+                params.push_back(elem.fixed_value);
+            }
+        }
+        covariance_parameters[mapping.id] = std::move(params);
+    }
+}
+
+void ModelObjective::prepare_sem_status_and_extra_params(const std::vector<double>& constrained,
+                                                        std::unordered_map<std::string, std::vector<double>>& status,
+                                                        std::unordered_map<std::string, std::vector<double>>& extra_params) const {
+    // Prepare status for _stacked_y
+    status = status_;
+    if (sem_data_.count("_stacked_item_idx")) {
+        status["_stacked_y"] = sem_data_.at("_stacked_item_idx");
+    }
+
+    // Prepare extra_params for _stacked_y
+    extra_params = build_extra_params(constrained);
+    if (extra_param_mappings_.count("_stacked_y")) {
+        const auto& param_ids = extra_param_mappings_.at("_stacked_y");
+        std::vector<double> stacked_ep;
+        stacked_ep.reserve(param_ids.size());
+        for (const auto& pid : param_ids) {
+            size_t idx = catalog_.find_index(pid);
+            if (idx != ParameterCatalog::npos) {
+                stacked_ep.push_back(constrained[idx]);
+            } else {
+                try { stacked_ep.push_back(std::stod(pid)); } catch(...) { stacked_ep.push_back(0.0); }
+            }
+        }
+        extra_params["_stacked_y"] = std::move(stacked_ep);
+    }
+}
+
+void ModelObjective::build_sem_gradient_mappings(std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>& data_param_mappings,
+                                                std::unordered_map<std::string, LikelihoodDriver::DataParamMapping>& dispersion_param_mappings) const {
+    size_t n_outcomes = sem_outcomes_.size();
+    
+    // Construct data_param_mappings for loadings
+    // Initialize mappings for all loading variables
+    for(const auto& latent : sem_latents_) {
+        std::string loading_var = "_loading_" + latent;
+        LikelihoodDriver::DataParamMapping mapping;
+        mapping.stride = n_outcomes;
+        mapping.pattern.resize(n_outcomes);
+        data_param_mappings[loading_var] = mapping;
+    }
+    
+    // Fill patterns
+    for (const auto& info : loading_infos_) {
+        if (info.param_index != ParameterCatalog::npos) {
+            std::string loading_var = "_loading_" + sem_latents_[info.latent_index];
+            std::string param_id = catalog_.names()[info.param_index];
+            data_param_mappings[loading_var].pattern[info.outcome_index] = param_id;
+        }
+    }
+    
+    // Build dispersion mappings for analytic gradients
+    std::vector<std::string> pattern(sem_outcomes_.size());
+    for (const auto& info : residual_infos_) {
+        if (info.param_index != ParameterCatalog::npos) {
+            pattern[info.outcome_index] = catalog_.names()[info.param_index];
+        }
+    }
+    dispersion_param_mappings["_stacked_y"] = LikelihoodDriver::DataParamMapping{pattern, n_outcomes};
 }
 
 // -----------------------------------------------------------------------------

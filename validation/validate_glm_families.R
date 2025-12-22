@@ -107,18 +107,13 @@ df$y_bin_re <- rbinom(n, 1, df$prob_bin_re)
 fit_glmer_bin <- glmer(y_bin_re ~ x + (1 | g), data = df, family = binomial)
 ll_glmer_bin <- as.numeric(logLik(fit_glmer_bin))
 
-# SEMX
-covs <- list(list(name = "G_bin", structure = "diagonal", dimension = 1))
-res <- list(list(name = "re_bin", variables = "g", covariance = "G_bin"))
+# SEMX (use formula-based random effect to match glmer)
 model_bin_re <- semx_model(
-  equations = "y_bin_re ~ 1 + x",
-  families = c(y_bin_re = "binomial"),
-  covariances = covs,
-  random_effects = res
+  equations = "y_bin_re ~ 1 + x + (1 | g)",
+  families = c(y_bin_re = "binomial")
 )
-fit_semx_bin_re <- semx_fit(model_bin_re, df)
+fit_semx_bin_re <- semx_fit(model_bin_re, df, estimation_method = "ML")
 ll_semx_bin_re <- -fit_semx_bin_re$optimization_result$objective_value
 
 cat(sprintf("LogLik: glmer = %.4f, SEMX = %.4f\n", ll_glmer_bin, ll_semx_bin_re))
 expect_equal(ll_semx_bin_re, ll_glmer_bin, tolerance = 1e-2)
-

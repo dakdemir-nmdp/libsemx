@@ -3348,11 +3348,21 @@ std::unordered_map<std::string, double> LikelihoodDriver::evaluate_model_gradien
                     eval_offset += n_obs;
                 }
 
+                // Laplace approximation gradient for covariance parameter θ:
+                // dL/dθ = prior_term + logdet_term
+                //
+                // Prior term: 0.5 * u^T * G^{-1} * (dG/dθ) * G^{-1} * u - 0.5 * tr(G^{-1} * dG/dθ)
+                // This comes from: d/dθ [log p(u|θ)] where log p(u|θ) = -0.5*u^T*G^{-1}*u - 0.5*log|G|
                 double prior_term = 0.5 * quadratic_form(u_block, cache.Ginv_dG_Ginv, block.q) - 0.5 * cache.trace_Ginv_dG;
+                
+                // Log-det term: 0.5 * tr(H^{-1} * G^{-1} * (dG/dθ) * G^{-1})
+                // This comes from: -0.5 * d/dθ [log |H|] where H = Z^T*W*Z + G^{-1}
+                // Using: d/dθ [log |H|] = tr(H^{-1} * dH/dθ) and dH/dθ = -G^{-1} * (dG/dθ) * G^{-1}
                 double trace_term = 0.0;
                 std::vector<double> inv_block = get_inverse_block(laplace_result, block, Q);
                 for (std::size_t r = 0; r < block.q; ++r) {
                     for (std::size_t c = 0; c < block.q; ++c) {
+                        // Compute tr([H^{-1}]_block * G^{-1} * (dG/dθ) * G^{-1})
                         trace_term += inv_block[r * block.q + c] * cache.Ginv_dG_Ginv[c * block.q + r];
                     }
                 }
