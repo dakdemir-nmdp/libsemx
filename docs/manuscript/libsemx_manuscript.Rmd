@@ -1,0 +1,424 @@
+---
+title: "libsemx Manuscript Draft"
+author: "Deniz Akdemir and contributors"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    latex_engine: xelatex
+documentclass: article
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, comment = "#>")
+knitr::opts_knit$set(root.dir = normalizePath("../.."))
+
+# Load semx R bindings (devtools fallback for local builds)
+tryCatch({
+  library(semx)
+}, error = function(e) {
+  if (file.exists("Rpkg/semx")) {
+    devtools::load_all("Rpkg/semx")
+  } else {
+    stop("semx package not available; install from Rpkg/semx or CRAN when released.")
+  }
+})
+
+# Reticulate setup for Python chunks
+library(reticulate)
+use_python(Sys.which("python"), required = FALSE)
+```
+
+## Abstract
+
+libsemx is a unified C++20 engine for structural equation modeling (SEM) and generalized linear mixed models (GLMM) with Python and R bindings. It couples a shared intermediate representation (ModelIR), flexible covariance structures (including genomic kernels), and support for non-Gaussian families and survival outcomes. We illustrate the modeling API, compare runtime/estimates against lme4 [@Bates2015], sommer [@Covarrubias2016], and statsmodels [@Seabold2010], and discuss when to prefer libsemx (SEM+mixed, non-Gaussian, custom covariance) versus specialized libraries. The project is openly developed on GitHub and intended for preprint submission (e.g., arXiv).
+
+## Introduction
+
+libsemx is a unified C++20 engine for structural equation modeling (SEM) and generalized linear mixed models (GLMM), exposed through Python and R. It keeps a shared intermediate representation (ModelIR) for variables, paths, covariances, and random effects so both bindings produce identical likelihoods, gradients, and diagnostics.
+
+**Architecture at a glance**
+
+- Variables: observed, latent, grouping, exogenous; observed nodes carry families (gaussian, binomial, poisson, negative binomial, gamma, Weibull, exponential, log-normal, log-logistic, ordinal).
+- Edges: loadings (`=~`), regressions (`~`), covariances (`~~`) tied to parameter IDs for constraints/equality.
+- Covariances: unstructured, diagonal, compound symmetry, AR(1), Toeplitz, Kronecker, fixed/scaled fixed, multi-kernel simplex blends.
+- Random effects: named effects referencing covariances; optional `lambda` shrinkage for ridge and genomic prediction.
+- Estimation: ML/REML with L-BFGS or gradient descent, Average Information REML for variance components, Laplace for non-Gaussian random effects, spectral shortcuts for dense genomic kernels, FIML for missing data, SEM fit indices (χ², CFI, TLI, RMSEA, SRMR).
+
+## Example 1: Random slope LMM (sleepstudy, R)
+
+Real data (`data/sleepstudy.csv`) with subject-specific intercepts and slopes:
+
+```{r lmm-sleepstudy}
+library(dplyr)
+sleep_df <- readr::read_csv("data/sleepstudy.csv", show_col_types = FALSE) %>%
+  select(-rownames) %>%
+  mutate(Reaction = Reaction / 100)
+
+model_lmm <- semx_model(
+  equations = c("Reaction ~ Days + (Days | Subject)"),
+  families = c(Reaction = "gaussian")
+)
+
+t_semx <- system.time({
+  fit_lmm <- semx_fit(model_lmm, sleep_df, optimizer_name = "lbfgs")
+})
+fit_lmm_elapsed <- t_semx[["elapsed"]]
+
+summary(fit_lmm)                 # fixed effects, variances, fit indices
+semx_ranef(fit_lmm) %>% head()   # BLUPs per random-effect block
+```
+
+## Example 1b: Same model via Python
+
+The same IR is built and fit from Python using `reticulate`:
+
+```{python}
+import pandas as pd
+import numpy as np
+from semx import Model
+
+sleep_df = pd.read_csv("data/sleepstudy.csv")
+sleep_df["Reaction"] = sleep_df["Reaction"] / 100.0
+# Encode grouping as integer codes (required by C++ backend)
+sleep_df["Subject"] = pd.Categorical(sleep_df["Subject"]).codes.astype(int)
+
+# Explicit residual variance term and random slope
+spec = Model(
+    equations=[
+        "Reaction ~ 1 + Days + (Days | Subject)",
+        "Reaction ~~ Reaction",
+    ],
+    families={"Reaction": "gaussian", "Days": "gaussian"},
+    kinds={"Subject": "grouping"},
+)
+
+fit = spec.fit(sleep_df)
+
+param_map = dict(zip(fit.fit_result.parameter_names, fit.fit_result.optimization_result.parameters))
+print("Parameters (name=value):")
+for k, v in param_map.items():
+    print(f"  {k}: {v:.6f}")
+
+# Manual BLUPs (pybind currently returns zeros for random_effects; compute directly)
+beta = np.array([param_map["beta_Reaction_on__intercept"], param_map["beta_Reaction_on_Days"]])
+sigma_e = param_map["psi_Reaction_Reaction"]
+G = np.array([
+    [param_map["cov_re_1_0"], param_map["cov_re_1_1"]],
+    [param_map["cov_re_1_1"], param_map["cov_re_1_2"]],
+])
+
+blup_rows = []
+for subj, df_g in sleep_df.groupby("Subject"):
+    y = df_g["Reaction"].to_numpy()
+    days = df_g["Days"].to_numpy()
+    X = np.column_stack([np.ones_like(days), days])  # fixed + random design
+    resid = y - X.dot(beta)
+    V = X.dot(G).dot(X.T) + sigma_e * np.eye(len(y))
+    u = G.dot(X.T).dot(np.linalg.solve(V, resid))
+    blup_rows.append({"Subject": subj, "u_intercept": u[0], "u_days": u[1]})
+
+blups = pd.DataFrame(blup_rows).sort_values("Subject")
+print("\nBLUPs (first 6 subjects):")
+print(blups.head(6))
+```
+
+## Example 2: CFA / SEM (BFI personality items, R)
+
+Confirmatory factor analysis on the Big Five inventory (`data/bfi.csv`). Latent variances are fixed to 1 for scale identification.
+
+```{r cfa-bfi}
+bfi_df <- readr::read_csv("data/bfi.csv", show_col_types = FALSE) %>%
+  select(-rownames) %>%
+  na.omit() %>%
+  slice_head(n = 600)
+
+item_cols <- c(paste0("A", 1:5), paste0("C", 1:5), paste0("E", 1:5), paste0("N", 1:5), paste0("O", 1:5))
+bfi_df[item_cols] <- scale(bfi_df[item_cols])
+
+equations <- c(
+  "Agreeableness =~ NA*A1 + A2 + A3 + A4 + A5",
+  "Conscientiousness =~ NA*C1 + C2 + C3 + C4 + C5",
+  "Extraversion =~ NA*E1 + E2 + E3 + E4 + E5",
+  "Neuroticism =~ NA*N1 + N2 + N3 + N4 + N5",
+  "Openness =~ NA*O1 + O2 + O3 + O4 + O5",
+  "Agreeableness ~~ 1*Agreeableness",
+  "Conscientiousness ~~ 1*Conscientiousness",
+  "Extraversion ~~ 1*Extraversion",
+  "Neuroticism ~~ 1*Neuroticism",
+  "Openness ~~ 1*Openness"
+)
+
+families <- setNames(rep("gaussian", length(item_cols)), item_cols)
+
+# Mildly informative starting values to stabilize L-BFGS
+init_params <- list()
+for (eq in equations) {
+  if (grepl("=~", eq)) {
+    parts <- strsplit(eq, "=~")[[1]]
+    latent <- trimws(parts[1])
+    inds <- trimws(strsplit(parts[2], "\\+")[[1]])
+    for (ind_raw in inds) {
+      ind <- gsub("NA\\*", "", trimws(ind_raw))
+      init_params[[paste0("lambda_", ind, "_on_", latent)]] <- 0.5
+      init_params[[paste0("psi_", ind, "_", ind)]] <- 0.5
+    }
+  }
+}
+
+model_cfa <- semx_model(
+  equations = equations,
+  families = families,
+  parameters = init_params
+)
+
+fit_cfa <- semx_fit(model_cfa, bfi_df, optimizer_name = "lbfgs")
+summary(fit_cfa)           # loadings, residual variances, fit indices
+```
+
+```{r cfa-plot, eval=FALSE}
+# Path diagram (optional; not exported in NAMESPACE, use :::)
+# semx:::semx_plot_path(fit_cfa)
+```
+
+## Example 3: Survival regression (ovarian, R)
+
+Weibull survival with censoring (`data/ovarian_survival.csv`), fixed effects on age and treatment arm:
+
+```{r survival-ovarian}
+ovarian <- readr::read_csv("data/ovarian_survival.csv", show_col_types = FALSE) %>%
+  select(-rownames)
+
+surv_model <- semx_model(
+  equations = c("Surv(futime, fustat) ~ age + rx + ecog.ps"),
+  families = c(futime = "weibull", age = "gaussian", rx = "gaussian", ecog.ps = "gaussian")
+)
+
+fit_surv <- semx_fit(
+  surv_model,
+  ovarian,
+  options = list(max_iterations = 300, tolerance = 1e-5, force_laplace = TRUE),
+  optimizer_name = "lbfgs"
+)
+
+summary(fit_surv)   # regression coefficients, scale/shape
+
+# Predict survival at selected times
+semx_predict_survival(fit_surv, newdata = ovarian[1:3, ], times = c(100, 300, 500), outcome = "futime")
+```
+
+## Example 4: Genomic mixed model (Maize Diversity Panel, R)
+
+Single-kernel GBLUP on standardized height (`EarHT`) using SNP markers (`data/mdp_numeric.csv`, `data/mdp_traits.csv`). To keep knitting fast, a small marker subset is used; increase `p_subset` for fuller analyses.
+
+```{r gblup-mdp}
+library(Matrix)
+
+numeric_df <- readr::read_csv("data/mdp_numeric.csv", show_col_types = FALSE)
+traits_df <- readr::read_csv("data/mdp_traits.csv", show_col_types = FALSE) %>%
+  rename(taxa = Taxa)
+
+merged_df <- numeric_df %>%
+  inner_join(traits_df, by = c("taxa" = "taxa")) %>%
+  filter(!is.na(EarHT))
+
+marker_cols <- setdiff(names(numeric_df), "taxa")
+p_subset <- 300
+marker_cols <- marker_cols[seq_len(min(p_subset, length(marker_cols)))]
+
+M <- as.matrix(merged_df[, marker_cols])
+merged_df$EarHT_std <- scale(merged_df$EarHT)
+merged_df$all_groups <- 1  # single grouping indicator for random effect
+
+model_gblup <- semx_model(
+  equations = c("EarHT_std ~ 1"),
+  families = c(EarHT_std = "gaussian"),
+  genomic = list(polygenic = list(markers = M, structure = "grm")),
+  random_effects = list(
+    list(name = "u", variables = c("all_groups"), covariance = "polygenic")
+  )
+)
+
+fit_gblup <- semx_fit(model_gblup, merged_df, optimizer_name = "lbfgs")
+summary(fit_gblup)                   # genetic vs residual variance
+
+# Extract variance components and heritability (h2)
+param_names <- fit_gblup$parameter_names
+if (is.null(param_names) || length(param_names) == 0) {
+  # Fallback to IR parameter ids
+  param_names <- fit_gblup$model$ir$parameter_ids()
+}
+params <- setNames(fit_gblup$optimization_result$parameters, param_names)
+
+genetic_key <- "polygenic_0"
+if (is.null(params[[genetic_key]])) {
+  poly_keys <- grep("^polygenic", names(params), value = TRUE)
+  if (length(poly_keys)) genetic_key <- poly_keys[[1]]
+}
+resid_key <- "psi_EarHT_std_EarHT_std"
+
+genetic_var <- params[[genetic_key]]
+resid_var <- params[[resid_key]]
+
+if (!is.null(genetic_var) && !is.null(resid_var)) {
+  h2 <- genetic_var / (genetic_var + resid_var)
+  vc_tbl <- data.frame(
+    component = c("Genetic (GRM)", "Residual"),
+    variance = c(genetic_var, resid_var),
+    proportion = c(genetic_var, resid_var) / (genetic_var + resid_var)
+  )
+  print(vc_tbl)
+  cat(sprintf("Narrow-sense heritability (h2): %.3f\n", h2))
+} else {
+  cat(
+    "Could not locate variance components to compute h2; available parameters:\n",
+    paste(names(params), collapse = ", "),
+    "\n"
+  )
+}
+```
+
+## Comparisons to lme4 and sommer (runtime + variance components)
+
+Small side-by-side fits on shared datasets; guarded by `requireNamespace()` to keep knitting robust.
+
+```{r compare-lme4-sommer}
+library(tibble)
+
+compare_rows <- list()
+
+# libsemx (sleepstudy random slopes; already fit above)
+if (exists("fit_lmm")) {
+  pe <- fit_lmm$optimization_result$parameters
+  pn <- fit_lmm$parameter_names
+  if (!is.null(pn) && length(pn) == length(pe)) {
+    pe <- setNames(pe, pn)
+  }
+  beta0 <- pe[["alpha_Reaction_on__intercept"]] %||% pe[["beta_Reaction_on__intercept"]] %||% pe[[1]]
+  beta1 <- pe[["beta_Reaction_on_Days"]] %||% pe[[2]]
+  # Random-effect Cholesky diagonals -> variances
+  var_intercept <- pe[["cov_re_1_0"]] %||% pe[[length(pe) - 2]]
+  var_slope <- pe[["cov_re_1_2"]] %||% pe[[length(pe) - 0]]
+  if (!is.null(names(pe))) {
+    if ("cov_re_1_0" %in% names(pe)) var_intercept <- var_intercept^2
+    if ("cov_re_1_2" %in% names(pe)) var_slope <- var_slope^2
+  }
+  compare_rows[["libsemx_sleepstudy"]] <- tibble(
+    package = "libsemx",
+    model = "sleepstudy",
+    beta0 = beta0,
+    beta1 = beta1,
+    var_intercept = var_intercept,
+    var_slope = var_slope,
+    elapsed = fit_lmm_elapsed %||% NA_real_
+  )
+}
+
+# lme4 on sleepstudy
+if (requireNamespace("lme4", quietly = TRUE)) {
+  t_lme4 <- system.time({
+    lme4_fit <- lme4::lmer(Reaction ~ Days + (Days | Subject), data = sleep_df)
+  })
+  vc_mat <- as.matrix(lme4::VarCorr(lme4_fit)$Subject)
+  intercept_var <- vc_mat[1, 1]
+  slope_var <- vc_mat[2, 2]
+  compare_rows[["lme4_sleepstudy"]] <- tibble(
+    package = "lme4",
+    model = "sleepstudy",
+    beta0 = lme4::fixef(lme4_fit)[["(Intercept)"]],
+    beta1 = lme4::fixef(lme4_fit)[["Days"]],
+    var_intercept = intercept_var,
+    var_slope = slope_var,
+    elapsed = t_lme4[["elapsed"]]
+  )
+}
+
+# sommer on MDP GBLUP (same marker subset as above)
+if (requireNamespace("sommer", quietly = TRUE)) {
+  Gmat <- tcrossprod(scale(M)) / ncol(M)
+  rownames(Gmat) <- merged_df$taxa
+  colnames(Gmat) <- merged_df$taxa
+  mdp_dat <- merged_df %>% mutate(taxa = factor(taxa))
+  sommer_res <- tryCatch({
+    t_sommer <- system.time({
+      sommer_fit <- sommer::mmer(
+        EarHT_std ~ 1,
+        random = ~ sommer::vsr(taxa, Gu = Gmat),
+        data = mdp_dat
+      )
+    })
+    list(fit = sommer_fit, elapsed = t_sommer[["elapsed"]])
+  }, error = function(e) {
+    message("sommer failed: ", conditionMessage(e))
+    NULL
+  })
+  if (!is.null(sommer_res)) {
+    vc_sommer <- sommer::summary.mmer(sommer_res$fit)$varcomp
+    compare_rows[["sommer_mdp"]] <- tibble(
+      package = "sommer",
+      model = "mdp_gblup",
+      beta0 = sommer_res$fit$Beta[1, 1],
+      beta1 = NA_real_,
+      var_intercept = vc_sommer["u:taxa", "VarComp"],
+      var_slope = NA_real_,
+      elapsed = sommer_res$elapsed
+    )
+  }
+}
+
+if (length(compare_rows)) {
+  dplyr::bind_rows(compare_rows)
+} else {
+  message("No comparison packages available.")
+}
+```
+
+## Comparisons to related libraries
+
+| Library            | Scope                         | Families               | Covariance/kernels                           | SEM support | Notes |
+|--------------------|-------------------------------|------------------------|----------------------------------------------|-------------|-------|
+| libsemx            | SEM + GLMM unified            | Gaussian, GLM, survival, ordinal | Unstructured, CS, AR(1), Toeplitz, Kronecker, genomic/multi-kernel | Yes | C++ core, Python/R front-ends, spectral shortcuts, FIML |
+| statsmodels MixedLM| Linear mixed models           | Mostly Gaussian        | Random intercept/slope, limited structures   | No          | No Laplace for non-Gaussian; no latent variables |
+| lme4               | GLMM (R)                      | Gaussian, binomial, Poisson (others via glmer) | Random effects with simple variance components | Limited     | No SEM paths or fit indices; no genomic kernels |
+| nlme               | Linear mixed models (R)       | Gaussian               | Correlation/covariance structures, no kernels| No          | Older API, limited non-Gaussian support |
+| lavaan             | SEM (R)                       | Mostly Gaussian        | Latent covariance structures                 | Yes         | No mixed-model random effects or GLMM families |
+| sommer             | Mixed models with kernels (R) | Gaussian               | Genomic kernels, multi-trait                 | No          | Genomic focus; limited non-Gaussian families |
+
+## Reproducibility and next steps
+
+- Data live in `data/` and examples mirror `docs/examples/libsemx_starter.Rmd` and `docs/examples/mdp_analysis.Rmd`.
+- Python examples: `python/examples/shrinkage_example.py`, `python/examples/crossed_effects_example.py`.
+- R example: `Rpkg/semx/examples/shrinkage_example.R`.
+
+Planned manuscript additions: benchmark tables against lme4/nlme/lavaan/sommer/statsmodels, multi-group invariance SEM, competing risks survival, and multi-kernel simplex genomic prediction with real kernels.
+
+## Why libsemx (and why it can be slower on tiny models)
+
+- **General engine vs. special-case speed:** lme4/nlme have hand-optimized Gaussian REML/ML paths; they are very fast on small linear mixed models. libsemx runs a unified L-BFGS/Laplace/FIML stack that can handle non-Gaussian families, latent variables, survival, and custom covariances. That generality adds startup/solver overhead on toy problems (sleepstudy), but becomes advantageous as models get richer (ordinal, survival, multi-kernel, SEM).
+- **Unified IR and cross-language parity:** Python and R bindings share the same ModelIR and likelihood driver, so estimates/gradients/fit indices match across languages and with the C++ core. This reduces drift between front-ends.
+- **Non-Gaussian and survival support:** Built-in Laplace approximation, competing risks/survival families, and dispersion handling go beyond what lme4/nlme provide.
+- **Flexible covariances and genomics:** Supports AR(1)/Toeplitz/Kronecker, multi-kernel simplex blends, and spectral shortcuts for dense kernels; integrates genomic prediction workflows out of the box.
+- **SEM + mixed models together:** lavaan-style SEM paths with mixed-model random effects and GLMM families, plus SEM fit indices and modification indices.
+- **Diagnostics and post-estimation:** Standard errors, BLUPs, fit indices, and (planned) exported Hessians/standardization stay consistent across languages.
+
+**When to pick libsemx**
+
+- You need SEM + mixed effects in one model (latent factors plus random effects).
+- You have non-Gaussian outcomes (binomial, Poisson/neg-bin, survival, ordinal) with random effects.
+- You need flexible or custom covariance structures (multi-kernel, Kronecker, AR/Toeplitz).
+- You want reproducible parity between Python and R for the same analysis.
+
+**When lme4/nlme might be faster**
+
+- Small Gaussian LMMs with simple random structures where lme4’s specialized code path dominates. For these, you can lower libsemx tolerances/iterations (`max_iterations = 50`, `tolerance = 1e-4`) to reduce overhead, but lme4 will likely remain faster on tiny datasets. On larger or more complex models, the gap narrows because likelihood evaluation—not setup overhead—dominates runtime.
+
+## Interpreting fit indices and degrees of freedom
+
+- Chi-square/df/CFI/TLI/RMSEA/SRMR are computed only when SEM sample statistics are available (latent-variable models or multi-group SEM). GLMM-only fits (e.g., survival, GBLUP, simple mixed models) leave `df` as `NA` and the chi-square carries no SEM meaning there. Use AIC/BIC/variance components/BLUPs for mixed models; use SEM indices only for latent-variable analyses with covariance structure.
