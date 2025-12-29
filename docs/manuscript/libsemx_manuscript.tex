@@ -1,0 +1,954 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+]{article}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{5}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\usepackage{framed}
+\definecolor{shadecolor}{RGB}{248,248,248}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{0.94,0.16,0.16}{#1}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\BuiltInTok}[1]{#1}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{0.64,0.00,0.00}{\textbf{#1}}}
+\newcommand{\ExtensionTok}[1]{#1}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\ImportTok}[1]{#1}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\RegionMarkerTok}[1]{#1}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.00,0.00,0.00}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+% definitions for citeproc citations
+\NewDocumentCommand\citeproctext{}{}
+\NewDocumentCommand\citeproc{mm}{%
+  \begingroup\def\citeproctext{#2}\cite{#1}\endgroup}
+\makeatletter
+ % allow citations to break across lines
+ \let\@cite@ofmt\@firstofone
+ % avoid brackets around text for \cite:
+ \def\@biblabel#1{}
+ \def\@cite#1#2{{#1\if@tempswa , #2\fi}}
+\makeatother
+\newlength{\cslhangindent}
+\setlength{\cslhangindent}{1.5em}
+\newlength{\csllabelwidth}
+\setlength{\csllabelwidth}{3em}
+\newenvironment{CSLReferences}[2] % #1 hanging-indent, #2 entry-spacing
+ {\begin{list}{}{%
+  \setlength{\itemindent}{0pt}
+  \setlength{\leftmargin}{0pt}
+  \setlength{\parsep}{0pt}
+  % turn on hanging indent if param 1 is 1
+  \ifodd #1
+   \setlength{\leftmargin}{\cslhangindent}
+   \setlength{\itemindent}{-1\cslhangindent}
+  \fi
+  % set entry spacing
+  \setlength{\itemsep}{#2\baselineskip}}}
+ {\end{list}}
+\usepackage{calc}
+\newcommand{\CSLBlock}[1]{\hfill\break\parbox[t]{\linewidth}{\strut\ignorespaces#1\strut}}
+\newcommand{\CSLLeftMargin}[1]{\parbox[t]{\csllabelwidth}{\strut#1\strut}}
+\newcommand{\CSLRightInline}[1]{\parbox[t]{\linewidth - \csllabelwidth}{\strut#1\strut}}
+\newcommand{\CSLIndent}[1]{\hspace{\cslhangindent}#1}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={libsemx Manuscript Draft},
+  pdfauthor={Deniz Akdemir and contributors},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{libsemx Manuscript Draft}
+\author{Deniz Akdemir and contributors}
+\date{2025-12-29}
+
+\begin{document}
+\maketitle
+
+{
+\setcounter{tocdepth}{2}
+\tableofcontents
+}
+\subsection{Abstract}\label{abstract}
+
+libsemx is a unified C++20 engine for structural equation modeling (SEM)
+and generalized linear mixed models (GLMM) with Python and R bindings.
+It couples a shared intermediate representation (ModelIR), flexible
+covariance structures (including genomic kernels), and support for
+non-Gaussian families and survival outcomes. We illustrate the modeling
+API, compare runtime/estimates against lme4 (Bates et al. 2015), sommer
+(Covarrubias-Pazaran 2016), and statsmodels (Seabold and Perktold 2010),
+and discuss when to prefer libsemx (SEM+mixed, non-Gaussian, custom
+covariance) versus specialized libraries. The project is openly
+developed on GitHub and intended for preprint submission (e.g., arXiv).
+
+\subsection{Introduction}\label{introduction}
+
+libsemx is a unified C++20 engine for structural equation modeling (SEM)
+and generalized linear mixed models (GLMM), exposed through Python and
+R. It keeps a shared intermediate representation (ModelIR) for
+variables, paths, covariances, and random effects so both bindings
+produce identical likelihoods, gradients, and diagnostics.
+
+\textbf{Architecture at a glance}
+
+\begin{itemize}
+\tightlist
+\item
+  Variables: observed, latent, grouping, exogenous; observed nodes carry
+  families (gaussian, binomial, poisson, negative binomial, gamma,
+  Weibull, exponential, log-normal, log-logistic, ordinal).
+\item
+  Edges: loadings (\texttt{=\textasciitilde{}}), regressions
+  (\texttt{\textasciitilde{}}), covariances
+  (\texttt{\textasciitilde{}\textasciitilde{}}) tied to parameter IDs
+  for constraints/equality.
+\item
+  Covariances: unstructured, diagonal, compound symmetry, AR(1),
+  Toeplitz, Kronecker, fixed/scaled fixed, multi-kernel simplex blends.
+\item
+  Random effects: named effects referencing covariances; optional
+  \texttt{lambda} shrinkage for ridge and genomic prediction.
+\item
+  Estimation: ML/REML with L-BFGS or gradient descent, Average
+  Information REML for variance components, Laplace for non-Gaussian
+  random effects, spectral shortcuts for dense genomic kernels, FIML for
+  missing data, SEM fit indices (χ², CFI, TLI, RMSEA, SRMR).
+\end{itemize}
+
+\subsection{Example 1: Random slope LMM (sleepstudy,
+R)}\label{example-1-random-slope-lmm-sleepstudy-r}
+
+Real data (\texttt{data/sleepstudy.csv}) with subject-specific
+intercepts and slopes:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\FunctionTok{library}\NormalTok{(dplyr)}
+\NormalTok{sleep\_df }\OtherTok{\textless{}{-}}\NormalTok{ readr}\SpecialCharTok{::}\FunctionTok{read\_csv}\NormalTok{(}\StringTok{"data/sleepstudy.csv"}\NormalTok{, }\AttributeTok{show\_col\_types =} \ConstantTok{FALSE}\NormalTok{) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{select}\NormalTok{(}\SpecialCharTok{{-}}\NormalTok{rownames) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{mutate}\NormalTok{(}\AttributeTok{Reaction =}\NormalTok{ Reaction }\SpecialCharTok{/} \DecValTok{100}\NormalTok{)}
+
+\NormalTok{model\_lmm }\OtherTok{\textless{}{-}} \FunctionTok{semx\_model}\NormalTok{(}
+  \AttributeTok{equations =} \FunctionTok{c}\NormalTok{(}\StringTok{"Reaction \textasciitilde{} Days + (Days | Subject)"}\NormalTok{),}
+  \AttributeTok{families =} \FunctionTok{c}\NormalTok{(}\AttributeTok{Reaction =} \StringTok{"gaussian"}\NormalTok{)}
+\NormalTok{)}
+
+\NormalTok{t\_semx }\OtherTok{\textless{}{-}} \FunctionTok{system.time}\NormalTok{(\{}
+\NormalTok{  fit\_lmm }\OtherTok{\textless{}{-}} \FunctionTok{semx\_fit}\NormalTok{(model\_lmm, sleep\_df, }\AttributeTok{optimizer\_name =} \StringTok{"lbfgs"}\NormalTok{)}
+\NormalTok{\})}
+\NormalTok{fit\_lmm\_elapsed }\OtherTok{\textless{}{-}}\NormalTok{ t\_semx[[}\StringTok{"elapsed"}\NormalTok{]]}
+
+\FunctionTok{summary}\NormalTok{(fit\_lmm)                 }\CommentTok{\# fixed effects, variances, fit indices}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> Optimization converged: TRUE 
+#> Iterations: 129 
+#> Log-likelihood: -47.039
+#> Chi-square: 106.078 (df=NA)
+#> AIC: 106.1, BIC: 125.2
+#> 
+#>                                 Estimate   Std.Error    z.value      P.value
+#> beta_Reaction_on_Days        0.104672860 0.015022367  6.9678006 3.219425e-12
+#> alpha_Reaction_on__intercept 2.514051048 0.066322768 37.9063046 0.000000e+00
+#> psi_Reaction_Reaction        0.065494103 0.007718554  8.4852813 0.000000e+00
+#> cov_re_1_0                   0.237805670 0.055773710  4.2637592 2.010161e-05
+#> cov_re_1_1                   0.004648935 0.018279776  0.2543212 7.992474e-01
+#> cov_re_1_2                   0.056979003 0.012291142  4.6357778 3.555979e-06
+#> 
+#> Variance Components:
+#>    Group      Name1 Name2    Variance    Std.Dev      Corr
+#>  Subject _intercept       0.056551536 0.23780567        NA
+#>  Subject _intercept  Days 0.001105543         NA 0.0813201
+#>  Subject       Days       0.003268219 0.05716834        NA
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\FunctionTok{semx\_ranef}\NormalTok{(fit\_lmm) }\SpecialCharTok{\%\textgreater{}\%} \FunctionTok{head}\NormalTok{()   }\CommentTok{\# BLUPs per random{-}effect block}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> $re_Subject_1
+#>       _intercept         Days
+#> 308  0.028156841  0.090755338
+#> 309 -0.400484878 -0.086440674
+#> 310 -0.384331534 -0.055133789
+#> 330  0.228322947 -0.046587502
+#> 331  0.215499891 -0.029445199
+#> 332  0.088155864 -0.002352091
+#> 333  0.164419872 -0.001588237
+#> 334 -0.069967202  0.010327362
+#> 335 -0.010374193 -0.105994435
+#> 337  0.346663149  0.086323772
+#> 349 -0.245581581  0.010644008
+#> 350 -0.123346311  0.064717035
+#> 351  0.042740664 -0.029553436
+#> 352  0.206222197  0.035617042
+#> 369  0.032585362  0.008717103
+#> 370 -0.247103332  0.046597354
+#> 371  0.007232813 -0.009710559
+#> 372  0.121189431  0.013106909
+\end{verbatim}
+
+\subsection{Example 1b: Same model via
+Python}\label{example-1b-same-model-via-python}
+
+The same IR is built and fit from Python using \texttt{reticulate}:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{import}\NormalTok{ pandas }\ImportTok{as}\NormalTok{ pd}
+\ImportTok{import}\NormalTok{ numpy }\ImportTok{as}\NormalTok{ np}
+\ImportTok{from}\NormalTok{ semx }\ImportTok{import}\NormalTok{ Model}
+
+\NormalTok{sleep\_df }\OperatorTok{=}\NormalTok{ pd.read\_csv(}\StringTok{"data/sleepstudy.csv"}\NormalTok{)}
+\NormalTok{sleep\_df[}\StringTok{"Reaction"}\NormalTok{] }\OperatorTok{=}\NormalTok{ sleep\_df[}\StringTok{"Reaction"}\NormalTok{] }\OperatorTok{/} \FloatTok{100.0}
+\CommentTok{\# Encode grouping as integer codes (required by C++ backend)}
+\NormalTok{sleep\_df[}\StringTok{"Subject"}\NormalTok{] }\OperatorTok{=}\NormalTok{ pd.Categorical(sleep\_df[}\StringTok{"Subject"}\NormalTok{]).codes.astype(}\BuiltInTok{int}\NormalTok{)}
+
+\CommentTok{\# Explicit residual variance term and random slope}
+\NormalTok{spec }\OperatorTok{=}\NormalTok{ Model(}
+\NormalTok{    equations}\OperatorTok{=}\NormalTok{[}
+        \StringTok{"Reaction \textasciitilde{} 1 + Days + (Days | Subject)"}\NormalTok{,}
+        \StringTok{"Reaction \textasciitilde{}\textasciitilde{} Reaction"}\NormalTok{,}
+\NormalTok{    ],}
+\NormalTok{    families}\OperatorTok{=}\NormalTok{\{}\StringTok{"Reaction"}\NormalTok{: }\StringTok{"gaussian"}\NormalTok{, }\StringTok{"Days"}\NormalTok{: }\StringTok{"gaussian"}\NormalTok{\},}
+\NormalTok{    kinds}\OperatorTok{=}\NormalTok{\{}\StringTok{"Subject"}\NormalTok{: }\StringTok{"grouping"}\NormalTok{\},}
+\NormalTok{)}
+
+\NormalTok{fit }\OperatorTok{=}\NormalTok{ spec.fit(sleep\_df)}
+
+\NormalTok{param\_map }\OperatorTok{=} \BuiltInTok{dict}\NormalTok{(}\BuiltInTok{zip}\NormalTok{(fit.fit\_result.parameter\_names, fit.fit\_result.optimization\_result.parameters))}
+\BuiltInTok{print}\NormalTok{(}\StringTok{"Parameters (name=value):"}\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> Parameters (name=value):
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ControlFlowTok{for}\NormalTok{ k, v }\KeywordTok{in}\NormalTok{ param\_map.items():}
+    \BuiltInTok{print}\NormalTok{(}\SpecialStringTok{f"  }\SpecialCharTok{\{}\NormalTok{k}\SpecialCharTok{\}}\SpecialStringTok{: }\SpecialCharTok{\{}\NormalTok{v}\SpecialCharTok{:.6f\}}\SpecialStringTok{"}\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#>   beta_Reaction_on__intercept: 2.514051
+#>   beta_Reaction_on_Days: 0.104673
+#>   psi_Reaction_Reaction: 0.065494
+#>   cov_re_1_0: 0.237806
+#>   cov_re_1_1: 0.004649
+#>   cov_re_1_2: 0.056979
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\CommentTok{\# Manual BLUPs (pybind currently returns zeros for random\_effects; compute directly)}
+\NormalTok{beta }\OperatorTok{=}\NormalTok{ np.array([param\_map[}\StringTok{"beta\_Reaction\_on\_\_intercept"}\NormalTok{], param\_map[}\StringTok{"beta\_Reaction\_on\_Days"}\NormalTok{]])}
+\NormalTok{sigma\_e }\OperatorTok{=}\NormalTok{ param\_map[}\StringTok{"psi\_Reaction\_Reaction"}\NormalTok{]}
+\NormalTok{G }\OperatorTok{=}\NormalTok{ np.array([}
+\NormalTok{    [param\_map[}\StringTok{"cov\_re\_1\_0"}\NormalTok{], param\_map[}\StringTok{"cov\_re\_1\_1"}\NormalTok{]],}
+\NormalTok{    [param\_map[}\StringTok{"cov\_re\_1\_1"}\NormalTok{], param\_map[}\StringTok{"cov\_re\_1\_2"}\NormalTok{]],}
+\NormalTok{])}
+
+\NormalTok{blup\_rows }\OperatorTok{=}\NormalTok{ []}
+\ControlFlowTok{for}\NormalTok{ subj, df\_g }\KeywordTok{in}\NormalTok{ sleep\_df.groupby(}\StringTok{"Subject"}\NormalTok{):}
+\NormalTok{    y }\OperatorTok{=}\NormalTok{ df\_g[}\StringTok{"Reaction"}\NormalTok{].to\_numpy()}
+\NormalTok{    days }\OperatorTok{=}\NormalTok{ df\_g[}\StringTok{"Days"}\NormalTok{].to\_numpy()}
+\NormalTok{    X }\OperatorTok{=}\NormalTok{ np.column\_stack([np.ones\_like(days), days])  }\CommentTok{\# fixed + random design}
+\NormalTok{    resid }\OperatorTok{=}\NormalTok{ y }\OperatorTok{{-}}\NormalTok{ X.dot(beta)}
+\NormalTok{    V }\OperatorTok{=}\NormalTok{ X.dot(G).dot(X.T) }\OperatorTok{+}\NormalTok{ sigma\_e }\OperatorTok{*}\NormalTok{ np.eye(}\BuiltInTok{len}\NormalTok{(y))}
+\NormalTok{    u }\OperatorTok{=}\NormalTok{ G.dot(X.T).dot(np.linalg.solve(V, resid))}
+\NormalTok{    blup\_rows.append(\{}\StringTok{"Subject"}\NormalTok{: subj, }\StringTok{"u\_intercept"}\NormalTok{: u[}\DecValTok{0}\NormalTok{], }\StringTok{"u\_days"}\NormalTok{: u[}\DecValTok{1}\NormalTok{]\})}
+
+\NormalTok{blups }\OperatorTok{=}\NormalTok{ pd.DataFrame(blup\_rows).sort\_values(}\StringTok{"Subject"}\NormalTok{)}
+\BuiltInTok{print}\NormalTok{(}\StringTok{"}\CharTok{\textbackslash{}n}\StringTok{BLUPs (first 6 subjects):"}\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> 
+#> BLUPs (first 6 subjects):
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\BuiltInTok{print}\NormalTok{(blups.head(}\DecValTok{6}\NormalTok{))}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#>    Subject  u_intercept    u_days
+#> 0        0    -0.058670  0.110399
+#> 1        1    -0.428320 -0.087291
+#> 2        2    -0.440213 -0.049516
+#> 3        3     0.344710 -0.068275
+#> 4        4     0.310120 -0.046555
+#> 5        5     0.116699 -0.007110
+\end{verbatim}
+
+\subsection{Example 2: CFA / SEM (BFI personality items,
+R)}\label{example-2-cfa-sem-bfi-personality-items-r}
+
+Confirmatory factor analysis on the Big Five inventory
+(\texttt{data/bfi.csv}). Latent variances are fixed to 1 for scale
+identification.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{bfi\_df }\OtherTok{\textless{}{-}}\NormalTok{ readr}\SpecialCharTok{::}\FunctionTok{read\_csv}\NormalTok{(}\StringTok{"data/bfi.csv"}\NormalTok{, }\AttributeTok{show\_col\_types =} \ConstantTok{FALSE}\NormalTok{) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{select}\NormalTok{(}\SpecialCharTok{{-}}\NormalTok{rownames) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{na.omit}\NormalTok{() }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{slice\_head}\NormalTok{(}\AttributeTok{n =} \DecValTok{600}\NormalTok{)}
+
+\NormalTok{item\_cols }\OtherTok{\textless{}{-}} \FunctionTok{c}\NormalTok{(}\FunctionTok{paste0}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\DecValTok{1}\SpecialCharTok{:}\DecValTok{5}\NormalTok{), }\FunctionTok{paste0}\NormalTok{(}\StringTok{"C"}\NormalTok{, }\DecValTok{1}\SpecialCharTok{:}\DecValTok{5}\NormalTok{), }\FunctionTok{paste0}\NormalTok{(}\StringTok{"E"}\NormalTok{, }\DecValTok{1}\SpecialCharTok{:}\DecValTok{5}\NormalTok{), }\FunctionTok{paste0}\NormalTok{(}\StringTok{"N"}\NormalTok{, }\DecValTok{1}\SpecialCharTok{:}\DecValTok{5}\NormalTok{), }\FunctionTok{paste0}\NormalTok{(}\StringTok{"O"}\NormalTok{, }\DecValTok{1}\SpecialCharTok{:}\DecValTok{5}\NormalTok{))}
+\NormalTok{bfi\_df[item\_cols] }\OtherTok{\textless{}{-}} \FunctionTok{scale}\NormalTok{(bfi\_df[item\_cols])}
+
+\NormalTok{equations }\OtherTok{\textless{}{-}} \FunctionTok{c}\NormalTok{(}
+  \StringTok{"Agreeableness =\textasciitilde{} NA*A1 + A2 + A3 + A4 + A5"}\NormalTok{,}
+  \StringTok{"Conscientiousness =\textasciitilde{} NA*C1 + C2 + C3 + C4 + C5"}\NormalTok{,}
+  \StringTok{"Extraversion =\textasciitilde{} NA*E1 + E2 + E3 + E4 + E5"}\NormalTok{,}
+  \StringTok{"Neuroticism =\textasciitilde{} NA*N1 + N2 + N3 + N4 + N5"}\NormalTok{,}
+  \StringTok{"Openness =\textasciitilde{} NA*O1 + O2 + O3 + O4 + O5"}\NormalTok{,}
+  \StringTok{"Agreeableness \textasciitilde{}\textasciitilde{} 1*Agreeableness"}\NormalTok{,}
+  \StringTok{"Conscientiousness \textasciitilde{}\textasciitilde{} 1*Conscientiousness"}\NormalTok{,}
+  \StringTok{"Extraversion \textasciitilde{}\textasciitilde{} 1*Extraversion"}\NormalTok{,}
+  \StringTok{"Neuroticism \textasciitilde{}\textasciitilde{} 1*Neuroticism"}\NormalTok{,}
+  \StringTok{"Openness \textasciitilde{}\textasciitilde{} 1*Openness"}
+\NormalTok{)}
+
+\NormalTok{families }\OtherTok{\textless{}{-}} \FunctionTok{setNames}\NormalTok{(}\FunctionTok{rep}\NormalTok{(}\StringTok{"gaussian"}\NormalTok{, }\FunctionTok{length}\NormalTok{(item\_cols)), item\_cols)}
+
+\CommentTok{\# Mildly informative starting values to stabilize L{-}BFGS}
+\NormalTok{init\_params }\OtherTok{\textless{}{-}} \FunctionTok{list}\NormalTok{()}
+\ControlFlowTok{for}\NormalTok{ (eq }\ControlFlowTok{in}\NormalTok{ equations) \{}
+  \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{grepl}\NormalTok{(}\StringTok{"=\textasciitilde{}"}\NormalTok{, eq)) \{}
+\NormalTok{    parts }\OtherTok{\textless{}{-}} \FunctionTok{strsplit}\NormalTok{(eq, }\StringTok{"=\textasciitilde{}"}\NormalTok{)[[}\DecValTok{1}\NormalTok{]]}
+\NormalTok{    latent }\OtherTok{\textless{}{-}} \FunctionTok{trimws}\NormalTok{(parts[}\DecValTok{1}\NormalTok{])}
+\NormalTok{    inds }\OtherTok{\textless{}{-}} \FunctionTok{trimws}\NormalTok{(}\FunctionTok{strsplit}\NormalTok{(parts[}\DecValTok{2}\NormalTok{], }\StringTok{"}\SpecialCharTok{\textbackslash{}\textbackslash{}}\StringTok{+"}\NormalTok{)[[}\DecValTok{1}\NormalTok{]])}
+    \ControlFlowTok{for}\NormalTok{ (ind\_raw }\ControlFlowTok{in}\NormalTok{ inds) \{}
+\NormalTok{      ind }\OtherTok{\textless{}{-}} \FunctionTok{gsub}\NormalTok{(}\StringTok{"NA}\SpecialCharTok{\textbackslash{}\textbackslash{}}\StringTok{*"}\NormalTok{, }\StringTok{""}\NormalTok{, }\FunctionTok{trimws}\NormalTok{(ind\_raw))}
+\NormalTok{      init\_params[[}\FunctionTok{paste0}\NormalTok{(}\StringTok{"lambda\_"}\NormalTok{, ind, }\StringTok{"\_on\_"}\NormalTok{, latent)]] }\OtherTok{\textless{}{-}} \FloatTok{0.5}
+\NormalTok{      init\_params[[}\FunctionTok{paste0}\NormalTok{(}\StringTok{"psi\_"}\NormalTok{, ind, }\StringTok{"\_"}\NormalTok{, ind)]] }\OtherTok{\textless{}{-}} \FloatTok{0.5}
+\NormalTok{    \}}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\NormalTok{model\_cfa }\OtherTok{\textless{}{-}} \FunctionTok{semx\_model}\NormalTok{(}
+  \AttributeTok{equations =}\NormalTok{ equations,}
+  \AttributeTok{families =}\NormalTok{ families,}
+  \AttributeTok{parameters =}\NormalTok{ init\_params}
+\NormalTok{)}
+
+\NormalTok{fit\_cfa }\OtherTok{\textless{}{-}} \FunctionTok{semx\_fit}\NormalTok{(model\_cfa, bfi\_df, }\AttributeTok{optimizer\_name =} \StringTok{"lbfgs"}\NormalTok{)}
+\FunctionTok{summary}\NormalTok{(fit\_cfa)           }\CommentTok{\# loadings, residual variances, fit indices}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> Optimization converged: TRUE 
+#> Iterations: 34 
+#> Log-likelihood: -19816.803
+#> Chi-square: 39733.606 (df=300)
+#> P-value: 0.000
+#> CFI: 0.671, TLI: 0.671, RMSEA: 0.089, SRMR: 0.142 
+#> AIC: 39733.6, BIC: 39953.5
+#> 
+#>                                  Estimate  Std.Error    z.value      P.value
+#> lambda_A1_on_Agreeableness     -0.3363039 0.04668813  -7.203200 5.881962e-13
+#> lambda_A2_on_Agreeableness      0.6610674 0.04379622  15.094167 0.000000e+00
+#> lambda_A3_on_Agreeableness      0.7153662 0.04306594  16.610952 0.000000e+00
+#> lambda_A4_on_Agreeableness      0.4863282 0.04485702  10.841742 0.000000e+00
+#> lambda_A5_on_Agreeableness      0.6278129 0.04361900  14.393107 0.000000e+00
+#> lambda_C1_on_Conscientiousness  0.4821873 0.04616018  10.445958 0.000000e+00
+#> lambda_C2_on_Conscientiousness  0.6434928 0.04560025  14.111606 0.000000e+00
+#> lambda_C3_on_Conscientiousness  0.5688728 0.04560263  12.474562 0.000000e+00
+#> lambda_C4_on_Conscientiousness -0.6281092 0.04603912 -13.642946 0.000000e+00
+#> lambda_C5_on_Conscientiousness -0.5268256 0.04667944 -11.286031 0.000000e+00
+#> lambda_E1_on_Extraversion      -0.5969958 0.04274728 -13.965701 0.000000e+00
+#> lambda_E2_on_Extraversion      -0.7148705 0.04177410 -17.112767 0.000000e+00
+#> lambda_E3_on_Extraversion       0.6008709 0.04329340  13.879042 0.000000e+00
+#> lambda_E4_on_Extraversion       0.6412587 0.04212011  15.224525 0.000000e+00
+#> lambda_E5_on_Extraversion       0.5474789 0.04359838  12.557322 0.000000e+00
+#> lambda_N1_on_Neuroticism        0.8109395 0.03619465  22.404956 0.000000e+00
+#> lambda_N2_on_Neuroticism        0.8346101 0.03587671  23.263286 0.000000e+00
+#> lambda_N3_on_Neuroticism        0.7297904 0.03820746  19.100730 0.000000e+00
+#> lambda_N4_on_Neuroticism        0.5120498 0.04198083  12.197227 0.000000e+00
+#> lambda_N5_on_Neuroticism        0.5223308 0.04120977  12.674927 0.000000e+00
+#> lambda_O1_on_Openness           0.5377736 0.04733319  11.361448 0.000000e+00
+#> lambda_O2_on_Openness          -0.4039174 0.04914854  -8.218298 2.220446e-16
+#> lambda_O3_on_Openness           0.7047112 0.05009588  14.067250 0.000000e+00
+#> lambda_O4_on_Openness           0.3442046 0.04870034   7.067807 1.574074e-12
+#> lambda_O5_on_Openness          -0.5396297 0.04986444 -10.821935 0.000000e+00
+#> psi_A1_A1                       0.8852330 0.05374155  16.472040 0.000000e+00
+#> psi_A2_A2                       0.5613232 0.04616556  12.158917 0.000000e+00
+#> psi_A3_A3                       0.4865845 0.04530684  10.739758 0.000000e+00
+#> psi_A4_A4                       0.7618182 0.04950252  15.389482 0.000000e+00
+#> psi_A5_A5                       0.6041843 0.04594582  13.149931 0.000000e+00
+#> psi_C1_C1                       0.7658288 0.05068899  15.108383 0.000000e+00
+#> psi_C2_C2                       0.5842504 0.04896502  11.931996 0.000000e+00
+#> psi_C3_C3                       0.6747170 0.04903766  13.759160 0.000000e+00
+#> psi_C4_C4                       0.6038121 0.04953052  12.190709 0.000000e+00
+#> psi_C5_C5                       0.7207881 0.05060029  14.244743 0.000000e+00
+#> psi_E1_E1                       0.6419294 0.04505546  14.247538 0.000000e+00
+#> psi_E2_E2                       0.4872935 0.04275529  11.397268 0.000000e+00
+#> psi_E3_E3                       0.6372875 0.04574054  13.932665 0.000000e+00
+#> psi_E4_E4                       0.5871206 0.04351983  13.490877 0.000000e+00
+#> psi_E5_E5                       0.6986002 0.04701422  14.859337 0.000000e+00
+#> psi_N1_N1                       0.3407105 0.02996233  11.371297 0.000000e+00
+#> psi_N2_N2                       0.3017593 0.02951567  10.223697 0.000000e+00
+#> psi_N3_N3                       0.4657393 0.03512550  13.259293 0.000000e+00
+#> psi_N4_N4                       0.7361384 0.04624708  15.917510 0.000000e+00
+#> psi_N5_N5                       0.7255039 0.04516783  16.062403 0.000000e+00
+#> psi_O1_O1                       0.7091329 0.05120514  13.848861 0.000000e+00
+#> psi_O2_O2                       0.8351841 0.05389234  15.497268 0.000000e+00
+#> psi_O3_O3                       0.5017154 0.05780255   8.679815 0.000000e+00
+#> psi_O4_O4                       0.8798565 0.05443095  16.164635 0.000000e+00
+#> psi_O5_O5                       0.7071331 0.05392201  13.113997 0.000000e+00
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\CommentTok{\# Path diagram (optional; not exported in NAMESPACE, use :::)}
+\CommentTok{\# semx:::semx\_plot\_path(fit\_cfa)}
+\end{Highlighting}
+\end{Shaded}
+
+\subsection{Example 3: Survival regression (ovarian,
+R)}\label{example-3-survival-regression-ovarian-r}
+
+Weibull survival with censoring (\texttt{data/ovarian\_survival.csv}),
+fixed effects on age and treatment arm:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{ovarian }\OtherTok{\textless{}{-}}\NormalTok{ readr}\SpecialCharTok{::}\FunctionTok{read\_csv}\NormalTok{(}\StringTok{"data/ovarian\_survival.csv"}\NormalTok{, }\AttributeTok{show\_col\_types =} \ConstantTok{FALSE}\NormalTok{) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{select}\NormalTok{(}\SpecialCharTok{{-}}\NormalTok{rownames)}
+
+\NormalTok{surv\_model }\OtherTok{\textless{}{-}} \FunctionTok{semx\_model}\NormalTok{(}
+  \AttributeTok{equations =} \FunctionTok{c}\NormalTok{(}\StringTok{"Surv(futime, fustat) \textasciitilde{} age + rx + ecog.ps"}\NormalTok{),}
+  \AttributeTok{families =} \FunctionTok{c}\NormalTok{(}\AttributeTok{futime =} \StringTok{"weibull"}\NormalTok{, }\AttributeTok{age =} \StringTok{"gaussian"}\NormalTok{, }\AttributeTok{rx =} \StringTok{"gaussian"}\NormalTok{, }\AttributeTok{ecog.ps =} \StringTok{"gaussian"}\NormalTok{)}
+\NormalTok{)}
+
+\NormalTok{fit\_surv }\OtherTok{\textless{}{-}} \FunctionTok{semx\_fit}\NormalTok{(}
+\NormalTok{  surv\_model,}
+\NormalTok{  ovarian,}
+  \AttributeTok{options =} \FunctionTok{list}\NormalTok{(}\AttributeTok{max\_iterations =} \DecValTok{300}\NormalTok{, }\AttributeTok{tolerance =} \FloatTok{1e{-}5}\NormalTok{, }\AttributeTok{force\_laplace =} \ConstantTok{TRUE}\NormalTok{),}
+  \AttributeTok{optimizer\_name =} \StringTok{"lbfgs"}
+\NormalTok{)}
+
+\FunctionTok{summary}\NormalTok{(fit\_surv)   }\CommentTok{\# regression coefficients, scale/shape}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> Optimization converged: TRUE 
+#> Iterations: 6 
+#> Log-likelihood: -327.766
+#> Chi-square: 671.532 (df=6)
+#> P-value: 0.000
+#> CFI: -0.885, TLI: -0.885, RMSEA: 0.394, SRMR: 10.911 
+#> AIC: 671.5, BIC: 681.6
+#> 
+#>                                 Estimate    Std.Error    z.value      P.value
+#> beta_futime_on_age           -0.07965424   0.01999171 -3.9843643 6.766100e-05
+#> beta_futime_on_rx             0.56114462   0.34087855  1.6461717 9.972842e-02
+#> beta_futime_on_ecog.ps        0.06019814   0.33114847  0.1817859 8.557507e-01
+#> alpha_futime_on__intercept   10.40851489   1.46333168  7.1128884 1.136424e-12
+#> psi_futime_futime             1.82751637   0.43298116  4.2207757 2.434631e-05
+#> psi_age_age                3252.65051220 902.12294613  3.6055512 3.114910e-04
+#> psi_rx_rx                     2.49999983   0.69337517  3.6055514 3.114908e-04
+#> psi_ecog.ps_ecog.ps           2.38461539   0.66137331  3.6055513 3.114910e-04
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\CommentTok{\# Predict survival at selected times}
+\FunctionTok{semx\_predict\_survival}\NormalTok{(fit\_surv, }\AttributeTok{newdata =}\NormalTok{ ovarian[}\DecValTok{1}\SpecialCharTok{:}\DecValTok{3}\NormalTok{, ], }\AttributeTok{times =} \FunctionTok{c}\NormalTok{(}\DecValTok{100}\NormalTok{, }\DecValTok{300}\NormalTok{, }\DecValTok{500}\NormalTok{), }\AttributeTok{outcome =} \StringTok{"futime"}\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#>         100        300          500
+#> 1 0.7425899 0.10902957 0.0035644391
+#> 2 0.6651962 0.04804094 0.0004432768
+#> 3 0.8926935 0.42944693 0.1164941986
+\end{verbatim}
+
+\subsection{Example 4: Genomic mixed model (Maize Diversity Panel,
+R)}\label{example-4-genomic-mixed-model-maize-diversity-panel-r}
+
+Single-kernel GBLUP on standardized height (\texttt{EarHT}) using SNP
+markers (\texttt{data/mdp\_numeric.csv}, \texttt{data/mdp\_traits.csv}).
+To keep knitting fast, a small marker subset is used; increase
+\texttt{p\_subset} for fuller analyses.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\FunctionTok{library}\NormalTok{(Matrix)}
+
+\NormalTok{numeric\_df }\OtherTok{\textless{}{-}}\NormalTok{ readr}\SpecialCharTok{::}\FunctionTok{read\_csv}\NormalTok{(}\StringTok{"data/mdp\_numeric.csv"}\NormalTok{, }\AttributeTok{show\_col\_types =} \ConstantTok{FALSE}\NormalTok{)}
+\NormalTok{traits\_df }\OtherTok{\textless{}{-}}\NormalTok{ readr}\SpecialCharTok{::}\FunctionTok{read\_csv}\NormalTok{(}\StringTok{"data/mdp\_traits.csv"}\NormalTok{, }\AttributeTok{show\_col\_types =} \ConstantTok{FALSE}\NormalTok{) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{rename}\NormalTok{(}\AttributeTok{taxa =}\NormalTok{ Taxa)}
+
+\NormalTok{merged\_df }\OtherTok{\textless{}{-}}\NormalTok{ numeric\_df }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{inner\_join}\NormalTok{(traits\_df, }\AttributeTok{by =} \FunctionTok{c}\NormalTok{(}\StringTok{"taxa"} \OtherTok{=} \StringTok{"taxa"}\NormalTok{)) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{filter}\NormalTok{(}\SpecialCharTok{!}\FunctionTok{is.na}\NormalTok{(EarHT))}
+
+\NormalTok{marker\_cols }\OtherTok{\textless{}{-}} \FunctionTok{setdiff}\NormalTok{(}\FunctionTok{names}\NormalTok{(numeric\_df), }\StringTok{"taxa"}\NormalTok{)}
+\NormalTok{p\_subset }\OtherTok{\textless{}{-}} \DecValTok{300}
+\NormalTok{marker\_cols }\OtherTok{\textless{}{-}}\NormalTok{ marker\_cols[}\FunctionTok{seq\_len}\NormalTok{(}\FunctionTok{min}\NormalTok{(p\_subset, }\FunctionTok{length}\NormalTok{(marker\_cols)))]}
+
+\NormalTok{M }\OtherTok{\textless{}{-}} \FunctionTok{as.matrix}\NormalTok{(merged\_df[, marker\_cols])}
+\NormalTok{merged\_df}\SpecialCharTok{$}\NormalTok{EarHT\_std }\OtherTok{\textless{}{-}} \FunctionTok{scale}\NormalTok{(merged\_df}\SpecialCharTok{$}\NormalTok{EarHT)}
+\NormalTok{merged\_df}\SpecialCharTok{$}\NormalTok{all\_groups }\OtherTok{\textless{}{-}} \DecValTok{1}  \CommentTok{\# single grouping indicator for random effect}
+
+\NormalTok{model\_gblup }\OtherTok{\textless{}{-}} \FunctionTok{semx\_model}\NormalTok{(}
+  \AttributeTok{equations =} \FunctionTok{c}\NormalTok{(}\StringTok{"EarHT\_std \textasciitilde{} 1"}\NormalTok{),}
+  \AttributeTok{families =} \FunctionTok{c}\NormalTok{(}\AttributeTok{EarHT\_std =} \StringTok{"gaussian"}\NormalTok{),}
+  \AttributeTok{genomic =} \FunctionTok{list}\NormalTok{(}\AttributeTok{polygenic =} \FunctionTok{list}\NormalTok{(}\AttributeTok{markers =}\NormalTok{ M, }\AttributeTok{structure =} \StringTok{"grm"}\NormalTok{)),}
+  \AttributeTok{random\_effects =} \FunctionTok{list}\NormalTok{(}
+    \FunctionTok{list}\NormalTok{(}\AttributeTok{name =} \StringTok{"u"}\NormalTok{, }\AttributeTok{variables =} \FunctionTok{c}\NormalTok{(}\StringTok{"all\_groups"}\NormalTok{), }\AttributeTok{covariance =} \StringTok{"polygenic"}\NormalTok{)}
+\NormalTok{  )}
+\NormalTok{)}
+
+\NormalTok{fit\_gblup }\OtherTok{\textless{}{-}} \FunctionTok{semx\_fit}\NormalTok{(model\_gblup, merged\_df, }\AttributeTok{optimizer\_name =} \StringTok{"lbfgs"}\NormalTok{)}
+\FunctionTok{summary}\NormalTok{(fit\_gblup)                   }\CommentTok{\# genetic vs residual variance}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> Optimization converged: TRUE 
+#> Iterations: 8 
+#> Log-likelihood: -365.835
+#> Chi-square: 737.670 (df=NA)
+#> AIC: 737.7, BIC: 748.6
+#> 
+#>                                   Estimate  Std.Error      z.value      P.value
+#> alpha_EarHT_std_on__intercept 3.242287e-10 0.04460759 7.268465e-09 1.000000e+00
+#> psi_EarHT_std_EarHT_std       5.551634e-01 0.06747569 8.227607e+00 2.220446e-16
+#> polygenic_0                   3.819819e-01 0.10538957 3.624475e+00 2.895486e-04
+#> 
+#> Variance Components:
+#>       Group       Name1 Name2  Variance   Std.Dev Corr
+#>  all_groups (Intercept)       0.3819829 0.6180476   NA
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\CommentTok{\# Extract variance components and heritability (h2)}
+\NormalTok{param\_names }\OtherTok{\textless{}{-}}\NormalTok{ fit\_gblup}\SpecialCharTok{$}\NormalTok{parameter\_names}
+\ControlFlowTok{if}\NormalTok{ (}\FunctionTok{is.null}\NormalTok{(param\_names) }\SpecialCharTok{||} \FunctionTok{length}\NormalTok{(param\_names) }\SpecialCharTok{==} \DecValTok{0}\NormalTok{) \{}
+  \CommentTok{\# Fallback to IR parameter ids}
+\NormalTok{  param\_names }\OtherTok{\textless{}{-}}\NormalTok{ fit\_gblup}\SpecialCharTok{$}\NormalTok{model}\SpecialCharTok{$}\NormalTok{ir}\SpecialCharTok{$}\FunctionTok{parameter\_ids}\NormalTok{()}
+\NormalTok{\}}
+\NormalTok{params }\OtherTok{\textless{}{-}} \FunctionTok{setNames}\NormalTok{(fit\_gblup}\SpecialCharTok{$}\NormalTok{optimization\_result}\SpecialCharTok{$}\NormalTok{parameters, param\_names)}
+
+\NormalTok{genetic\_key }\OtherTok{\textless{}{-}} \StringTok{"polygenic\_0"}
+\ControlFlowTok{if}\NormalTok{ (}\FunctionTok{is.null}\NormalTok{(params[[genetic\_key]])) \{}
+\NormalTok{  poly\_keys }\OtherTok{\textless{}{-}} \FunctionTok{grep}\NormalTok{(}\StringTok{"\^{}polygenic"}\NormalTok{, }\FunctionTok{names}\NormalTok{(params), }\AttributeTok{value =} \ConstantTok{TRUE}\NormalTok{)}
+  \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{length}\NormalTok{(poly\_keys)) genetic\_key }\OtherTok{\textless{}{-}}\NormalTok{ poly\_keys[[}\DecValTok{1}\NormalTok{]]}
+\NormalTok{\}}
+\NormalTok{resid\_key }\OtherTok{\textless{}{-}} \StringTok{"psi\_EarHT\_std\_EarHT\_std"}
+
+\NormalTok{genetic\_var }\OtherTok{\textless{}{-}}\NormalTok{ params[[genetic\_key]]}
+\NormalTok{resid\_var }\OtherTok{\textless{}{-}}\NormalTok{ params[[resid\_key]]}
+
+\ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.null}\NormalTok{(genetic\_var) }\SpecialCharTok{\&\&} \SpecialCharTok{!}\FunctionTok{is.null}\NormalTok{(resid\_var)) \{}
+\NormalTok{  h2 }\OtherTok{\textless{}{-}}\NormalTok{ genetic\_var }\SpecialCharTok{/}\NormalTok{ (genetic\_var }\SpecialCharTok{+}\NormalTok{ resid\_var)}
+\NormalTok{  vc\_tbl }\OtherTok{\textless{}{-}} \FunctionTok{data.frame}\NormalTok{(}
+    \AttributeTok{component =} \FunctionTok{c}\NormalTok{(}\StringTok{"Genetic (GRM)"}\NormalTok{, }\StringTok{"Residual"}\NormalTok{),}
+    \AttributeTok{variance =} \FunctionTok{c}\NormalTok{(genetic\_var, resid\_var),}
+    \AttributeTok{proportion =} \FunctionTok{c}\NormalTok{(genetic\_var, resid\_var) }\SpecialCharTok{/}\NormalTok{ (genetic\_var }\SpecialCharTok{+}\NormalTok{ resid\_var)}
+\NormalTok{  )}
+  \FunctionTok{print}\NormalTok{(vc\_tbl)}
+  \FunctionTok{cat}\NormalTok{(}\FunctionTok{sprintf}\NormalTok{(}\StringTok{"Narrow{-}sense heritability (h2): \%.3f}\SpecialCharTok{\textbackslash{}n}\StringTok{"}\NormalTok{, h2))}
+\NormalTok{\} }\ControlFlowTok{else}\NormalTok{ \{}
+  \FunctionTok{cat}\NormalTok{(}
+    \StringTok{"Could not locate variance components to compute h2; available parameters:}\SpecialCharTok{\textbackslash{}n}\StringTok{"}\NormalTok{,}
+    \FunctionTok{paste}\NormalTok{(}\FunctionTok{names}\NormalTok{(params), }\AttributeTok{collapse =} \StringTok{", "}\NormalTok{),}
+    \StringTok{"}\SpecialCharTok{\textbackslash{}n}\StringTok{"}
+\NormalTok{  )}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#>       component  variance proportion
+#> 1 Genetic (GRM) 0.3819819  0.4076015
+#> 2      Residual 0.5551634  0.5923985
+#> Narrow-sense heritability (h2): 0.408
+\end{verbatim}
+
+\subsection{Comparisons to lme4 and sommer (runtime + variance
+components)}\label{comparisons-to-lme4-and-sommer-runtime-variance-components}
+
+Small side-by-side fits on shared datasets; guarded by
+\texttt{requireNamespace()} to keep knitting robust.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\FunctionTok{library}\NormalTok{(tibble)}
+
+\NormalTok{compare\_rows }\OtherTok{\textless{}{-}} \FunctionTok{list}\NormalTok{()}
+
+\CommentTok{\# libsemx (sleepstudy random slopes; already fit above)}
+\ControlFlowTok{if}\NormalTok{ (}\FunctionTok{exists}\NormalTok{(}\StringTok{"fit\_lmm"}\NormalTok{)) \{}
+\NormalTok{  pe }\OtherTok{\textless{}{-}}\NormalTok{ fit\_lmm}\SpecialCharTok{$}\NormalTok{optimization\_result}\SpecialCharTok{$}\NormalTok{parameters}
+\NormalTok{  pn }\OtherTok{\textless{}{-}}\NormalTok{ fit\_lmm}\SpecialCharTok{$}\NormalTok{parameter\_names}
+  \ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.null}\NormalTok{(pn) }\SpecialCharTok{\&\&} \FunctionTok{length}\NormalTok{(pn) }\SpecialCharTok{==} \FunctionTok{length}\NormalTok{(pe)) \{}
+\NormalTok{    pe }\OtherTok{\textless{}{-}} \FunctionTok{setNames}\NormalTok{(pe, pn)}
+\NormalTok{  \}}
+\NormalTok{  beta0 }\OtherTok{\textless{}{-}}\NormalTok{ pe[[}\StringTok{"alpha\_Reaction\_on\_\_intercept"}\NormalTok{]] }\SpecialCharTok{\%||\%}\NormalTok{ pe[[}\StringTok{"beta\_Reaction\_on\_\_intercept"}\NormalTok{]] }\SpecialCharTok{\%||\%}\NormalTok{ pe[[}\DecValTok{1}\NormalTok{]]}
+\NormalTok{  beta1 }\OtherTok{\textless{}{-}}\NormalTok{ pe[[}\StringTok{"beta\_Reaction\_on\_Days"}\NormalTok{]] }\SpecialCharTok{\%||\%}\NormalTok{ pe[[}\DecValTok{2}\NormalTok{]]}
+  \CommentTok{\# Random{-}effect Cholesky diagonals {-}\textgreater{} variances}
+\NormalTok{  var\_intercept }\OtherTok{\textless{}{-}}\NormalTok{ pe[[}\StringTok{"cov\_re\_1\_0"}\NormalTok{]] }\SpecialCharTok{\%||\%}\NormalTok{ pe[[}\FunctionTok{length}\NormalTok{(pe) }\SpecialCharTok{{-}} \DecValTok{2}\NormalTok{]]}
+\NormalTok{  var\_slope }\OtherTok{\textless{}{-}}\NormalTok{ pe[[}\StringTok{"cov\_re\_1\_2"}\NormalTok{]] }\SpecialCharTok{\%||\%}\NormalTok{ pe[[}\FunctionTok{length}\NormalTok{(pe) }\SpecialCharTok{{-}} \DecValTok{0}\NormalTok{]]}
+  \ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.null}\NormalTok{(}\FunctionTok{names}\NormalTok{(pe))) \{}
+    \ControlFlowTok{if}\NormalTok{ (}\StringTok{"cov\_re\_1\_0"} \SpecialCharTok{\%in\%} \FunctionTok{names}\NormalTok{(pe)) var\_intercept }\OtherTok{\textless{}{-}}\NormalTok{ var\_intercept}\SpecialCharTok{\^{}}\DecValTok{2}
+    \ControlFlowTok{if}\NormalTok{ (}\StringTok{"cov\_re\_1\_2"} \SpecialCharTok{\%in\%} \FunctionTok{names}\NormalTok{(pe)) var\_slope }\OtherTok{\textless{}{-}}\NormalTok{ var\_slope}\SpecialCharTok{\^{}}\DecValTok{2}
+\NormalTok{  \}}
+\NormalTok{  compare\_rows[[}\StringTok{"libsemx\_sleepstudy"}\NormalTok{]] }\OtherTok{\textless{}{-}} \FunctionTok{tibble}\NormalTok{(}
+    \AttributeTok{package =} \StringTok{"libsemx"}\NormalTok{,}
+    \AttributeTok{model =} \StringTok{"sleepstudy"}\NormalTok{,}
+    \AttributeTok{beta0 =}\NormalTok{ beta0,}
+    \AttributeTok{beta1 =}\NormalTok{ beta1,}
+    \AttributeTok{var\_intercept =}\NormalTok{ var\_intercept,}
+    \AttributeTok{var\_slope =}\NormalTok{ var\_slope,}
+    \AttributeTok{elapsed =}\NormalTok{ fit\_lmm\_elapsed }\SpecialCharTok{\%||\%} \ConstantTok{NA\_real\_}
+\NormalTok{  )}
+\NormalTok{\}}
+
+\CommentTok{\# lme4 on sleepstudy}
+\ControlFlowTok{if}\NormalTok{ (}\FunctionTok{requireNamespace}\NormalTok{(}\StringTok{"lme4"}\NormalTok{, }\AttributeTok{quietly =} \ConstantTok{TRUE}\NormalTok{)) \{}
+\NormalTok{  t\_lme4 }\OtherTok{\textless{}{-}} \FunctionTok{system.time}\NormalTok{(\{}
+\NormalTok{    lme4\_fit }\OtherTok{\textless{}{-}}\NormalTok{ lme4}\SpecialCharTok{::}\FunctionTok{lmer}\NormalTok{(Reaction }\SpecialCharTok{\textasciitilde{}}\NormalTok{ Days }\SpecialCharTok{+}\NormalTok{ (Days }\SpecialCharTok{|}\NormalTok{ Subject), }\AttributeTok{data =}\NormalTok{ sleep\_df)}
+\NormalTok{  \})}
+\NormalTok{  vc\_mat }\OtherTok{\textless{}{-}} \FunctionTok{as.matrix}\NormalTok{(lme4}\SpecialCharTok{::}\FunctionTok{VarCorr}\NormalTok{(lme4\_fit)}\SpecialCharTok{$}\NormalTok{Subject)}
+\NormalTok{  intercept\_var }\OtherTok{\textless{}{-}}\NormalTok{ vc\_mat[}\DecValTok{1}\NormalTok{, }\DecValTok{1}\NormalTok{]}
+\NormalTok{  slope\_var }\OtherTok{\textless{}{-}}\NormalTok{ vc\_mat[}\DecValTok{2}\NormalTok{, }\DecValTok{2}\NormalTok{]}
+\NormalTok{  compare\_rows[[}\StringTok{"lme4\_sleepstudy"}\NormalTok{]] }\OtherTok{\textless{}{-}} \FunctionTok{tibble}\NormalTok{(}
+    \AttributeTok{package =} \StringTok{"lme4"}\NormalTok{,}
+    \AttributeTok{model =} \StringTok{"sleepstudy"}\NormalTok{,}
+    \AttributeTok{beta0 =}\NormalTok{ lme4}\SpecialCharTok{::}\FunctionTok{fixef}\NormalTok{(lme4\_fit)[[}\StringTok{"(Intercept)"}\NormalTok{]],}
+    \AttributeTok{beta1 =}\NormalTok{ lme4}\SpecialCharTok{::}\FunctionTok{fixef}\NormalTok{(lme4\_fit)[[}\StringTok{"Days"}\NormalTok{]],}
+    \AttributeTok{var\_intercept =}\NormalTok{ intercept\_var,}
+    \AttributeTok{var\_slope =}\NormalTok{ slope\_var,}
+    \AttributeTok{elapsed =}\NormalTok{ t\_lme4[[}\StringTok{"elapsed"}\NormalTok{]]}
+\NormalTok{  )}
+\NormalTok{\}}
+
+\CommentTok{\# sommer on MDP GBLUP (same marker subset as above)}
+\ControlFlowTok{if}\NormalTok{ (}\FunctionTok{requireNamespace}\NormalTok{(}\StringTok{"sommer"}\NormalTok{, }\AttributeTok{quietly =} \ConstantTok{TRUE}\NormalTok{)) \{}
+\NormalTok{  Gmat }\OtherTok{\textless{}{-}} \FunctionTok{tcrossprod}\NormalTok{(}\FunctionTok{scale}\NormalTok{(M)) }\SpecialCharTok{/} \FunctionTok{ncol}\NormalTok{(M)}
+  \FunctionTok{rownames}\NormalTok{(Gmat) }\OtherTok{\textless{}{-}}\NormalTok{ merged\_df}\SpecialCharTok{$}\NormalTok{taxa}
+  \FunctionTok{colnames}\NormalTok{(Gmat) }\OtherTok{\textless{}{-}}\NormalTok{ merged\_df}\SpecialCharTok{$}\NormalTok{taxa}
+\NormalTok{  mdp\_dat }\OtherTok{\textless{}{-}}\NormalTok{ merged\_df }\SpecialCharTok{\%\textgreater{}\%} \FunctionTok{mutate}\NormalTok{(}\AttributeTok{taxa =} \FunctionTok{factor}\NormalTok{(taxa))}
+\NormalTok{  sommer\_res }\OtherTok{\textless{}{-}} \FunctionTok{tryCatch}\NormalTok{(\{}
+\NormalTok{    t\_sommer }\OtherTok{\textless{}{-}} \FunctionTok{system.time}\NormalTok{(\{}
+\NormalTok{      sommer\_fit }\OtherTok{\textless{}{-}}\NormalTok{ sommer}\SpecialCharTok{::}\FunctionTok{mmer}\NormalTok{(}
+\NormalTok{        EarHT\_std }\SpecialCharTok{\textasciitilde{}} \DecValTok{1}\NormalTok{,}
+        \AttributeTok{random =} \SpecialCharTok{\textasciitilde{}}\NormalTok{ sommer}\SpecialCharTok{::}\FunctionTok{vsr}\NormalTok{(taxa, }\AttributeTok{Gu =}\NormalTok{ Gmat),}
+        \AttributeTok{data =}\NormalTok{ mdp\_dat}
+\NormalTok{      )}
+\NormalTok{    \})}
+    \FunctionTok{list}\NormalTok{(}\AttributeTok{fit =}\NormalTok{ sommer\_fit, }\AttributeTok{elapsed =}\NormalTok{ t\_sommer[[}\StringTok{"elapsed"}\NormalTok{]])}
+\NormalTok{  \}, }\AttributeTok{error =} \ControlFlowTok{function}\NormalTok{(e) \{}
+    \FunctionTok{message}\NormalTok{(}\StringTok{"sommer failed: "}\NormalTok{, }\FunctionTok{conditionMessage}\NormalTok{(e))}
+    \ConstantTok{NULL}
+\NormalTok{  \})}
+  \ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.null}\NormalTok{(sommer\_res)) \{}
+\NormalTok{    vc\_sommer }\OtherTok{\textless{}{-}}\NormalTok{ sommer}\SpecialCharTok{::}\FunctionTok{summary.mmer}\NormalTok{(sommer\_res}\SpecialCharTok{$}\NormalTok{fit)}\SpecialCharTok{$}\NormalTok{varcomp}
+\NormalTok{    compare\_rows[[}\StringTok{"sommer\_mdp"}\NormalTok{]] }\OtherTok{\textless{}{-}} \FunctionTok{tibble}\NormalTok{(}
+      \AttributeTok{package =} \StringTok{"sommer"}\NormalTok{,}
+      \AttributeTok{model =} \StringTok{"mdp\_gblup"}\NormalTok{,}
+      \AttributeTok{beta0 =}\NormalTok{ sommer\_res}\SpecialCharTok{$}\NormalTok{fit}\SpecialCharTok{$}\NormalTok{Beta[}\DecValTok{1}\NormalTok{, }\DecValTok{1}\NormalTok{],}
+      \AttributeTok{beta1 =} \ConstantTok{NA\_real\_}\NormalTok{,}
+      \AttributeTok{var\_intercept =}\NormalTok{ vc\_sommer[}\StringTok{"u:taxa"}\NormalTok{, }\StringTok{"VarComp"}\NormalTok{],}
+      \AttributeTok{var\_slope =} \ConstantTok{NA\_real\_}\NormalTok{,}
+      \AttributeTok{elapsed =}\NormalTok{ sommer\_res}\SpecialCharTok{$}\NormalTok{elapsed}
+\NormalTok{    )}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\ControlFlowTok{if}\NormalTok{ (}\FunctionTok{length}\NormalTok{(compare\_rows)) \{}
+\NormalTok{  dplyr}\SpecialCharTok{::}\FunctionTok{bind\_rows}\NormalTok{(compare\_rows)}
+\NormalTok{\} }\ControlFlowTok{else}\NormalTok{ \{}
+  \FunctionTok{message}\NormalTok{(}\StringTok{"No comparison packages available."}\NormalTok{)}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+#> # A tibble: 2 x 7
+#>   package model      beta0 beta1 var_intercept var_slope elapsed
+#>   <chr>   <chr>      <dbl> <dbl>         <dbl>     <dbl>   <dbl>
+#> 1 libsemx sleepstudy  2.51 0.105        0.0566   0.00325   1.36 
+#> 2 lme4    sleepstudy  2.51 0.105        0.0612   0.00351   0.463
+\end{verbatim}
+
+\subsection{Comparisons to related
+libraries}\label{comparisons-to-related-libraries}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1418}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.2199}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.1702}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.3262}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.0922}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 10\tabcolsep) * \real{0.0496}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Library
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Scope
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Families
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Covariance/kernels
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+SEM support
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Notes
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+libsemx & SEM + GLMM unified & Gaussian, GLM, survival, ordinal &
+Unstructured, CS, AR(1), Toeplitz, Kronecker, genomic/multi-kernel & Yes
+& C++ core, Python/R front-ends, spectral shortcuts, FIML \\
+statsmodels MixedLM & Linear mixed models & Mostly Gaussian & Random
+intercept/slope, limited structures & No & No Laplace for non-Gaussian;
+no latent variables \\
+lme4 & GLMM (R) & Gaussian, binomial, Poisson (others via glmer) &
+Random effects with simple variance components & Limited & No SEM paths
+or fit indices; no genomic kernels \\
+nlme & Linear mixed models (R) & Gaussian & Correlation/covariance
+structures, no kernels & No & Older API, limited non-Gaussian support \\
+lavaan & SEM (R) & Mostly Gaussian & Latent covariance structures & Yes
+& No mixed-model random effects or GLMM families \\
+sommer & Mixed models with kernels (R) & Gaussian & Genomic kernels,
+multi-trait & No & Genomic focus; limited non-Gaussian families \\
+\end{longtable}
+
+\subsection{Reproducibility and next
+steps}\label{reproducibility-and-next-steps}
+
+\begin{itemize}
+\tightlist
+\item
+  Data live in \texttt{data/} and examples mirror
+  \texttt{docs/examples/libsemx\_starter.Rmd} and
+  \texttt{docs/examples/mdp\_analysis.Rmd}.
+\item
+  Python examples: \texttt{python/examples/shrinkage\_example.py},
+  \texttt{python/examples/crossed\_effects\_example.py}.
+\item
+  R example: \texttt{Rpkg/semx/examples/shrinkage\_example.R}.
+\end{itemize}
+
+Planned manuscript additions: benchmark tables against
+lme4/nlme/lavaan/sommer/statsmodels, multi-group invariance SEM,
+competing risks survival, and multi-kernel simplex genomic prediction
+with real kernels.
+
+\subsection{Why libsemx (and why it can be slower on tiny
+models)}\label{why-libsemx-and-why-it-can-be-slower-on-tiny-models}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{General engine vs.~special-case speed:} lme4/nlme have
+  hand-optimized Gaussian REML/ML paths; they are very fast on small
+  linear mixed models. libsemx runs a unified L-BFGS/Laplace/FIML stack
+  that can handle non-Gaussian families, latent variables, survival, and
+  custom covariances. That generality adds startup/solver overhead on
+  toy problems (sleepstudy), but becomes advantageous as models get
+  richer (ordinal, survival, multi-kernel, SEM).
+\item
+  \textbf{Unified IR and cross-language parity:} Python and R bindings
+  share the same ModelIR and likelihood driver, so
+  estimates/gradients/fit indices match across languages and with the
+  C++ core. This reduces drift between front-ends.
+\item
+  \textbf{Non-Gaussian and survival support:} Built-in Laplace
+  approximation, competing risks/survival families, and dispersion
+  handling go beyond what lme4/nlme provide.
+\item
+  \textbf{Flexible covariances and genomics:} Supports
+  AR(1)/Toeplitz/Kronecker, multi-kernel simplex blends, and spectral
+  shortcuts for dense kernels; integrates genomic prediction workflows
+  out of the box.
+\item
+  \textbf{SEM + mixed models together:} lavaan-style SEM paths with
+  mixed-model random effects and GLMM families, plus SEM fit indices and
+  modification indices.
+\item
+  \textbf{Diagnostics and post-estimation:} Standard errors, BLUPs, fit
+  indices, and (planned) exported Hessians/standardization stay
+  consistent across languages.
+\end{itemize}
+
+\textbf{When to pick libsemx}
+
+\begin{itemize}
+\tightlist
+\item
+  You need SEM + mixed effects in one model (latent factors plus random
+  effects).
+\item
+  You have non-Gaussian outcomes (binomial, Poisson/neg-bin, survival,
+  ordinal) with random effects.
+\item
+  You need flexible or custom covariance structures (multi-kernel,
+  Kronecker, AR/Toeplitz).
+\item
+  You want reproducible parity between Python and R for the same
+  analysis.
+\end{itemize}
+
+\textbf{When lme4/nlme might be faster}
+
+\begin{itemize}
+\tightlist
+\item
+  Small Gaussian LMMs with simple random structures where lme4's
+  specialized code path dominates. For these, you can lower libsemx
+  tolerances/iterations (\texttt{max\_iterations\ =\ 50},
+  \texttt{tolerance\ =\ 1e-4}) to reduce overhead, but lme4 will likely
+  remain faster on tiny datasets. On larger or more complex models, the
+  gap narrows because likelihood evaluation---not setup
+  overhead---dominates runtime.
+\end{itemize}
+
+\subsection{Interpreting fit indices and degrees of
+freedom}\label{interpreting-fit-indices-and-degrees-of-freedom}
+
+\begin{itemize}
+\tightlist
+\item
+  Chi-square/df/CFI/TLI/RMSEA/SRMR are computed only when SEM sample
+  statistics are available (latent-variable models or multi-group SEM).
+  GLMM-only fits (e.g., survival, GBLUP, simple mixed models) leave
+  \texttt{df} as \texttt{NA} and the chi-square carries no SEM meaning
+  there. Use AIC/BIC/variance components/BLUPs for mixed models; use SEM
+  indices only for latent-variable analyses with covariance structure.
+\end{itemize}
+
+\phantomsection\label{refs}
+\begin{CSLReferences}{1}{0}
+\bibitem[\citeproctext]{ref-Bates2015}
+Bates, Douglas, Martin Mächler, Ben Bolker, and Steve Walker. 2015.
+{``Fitting Linear Mixed-Effects Models Using Lme4.''} \emph{Journal of
+Statistical Software} 67 (1): 1--48.
+\url{https://doi.org/10.18637/jss.v067.i01}.
+
+\bibitem[\citeproctext]{ref-Covarrubias2016}
+Covarrubias-Pazaran, Giovanny. 2016. {``Genome-Assisted Prediction of
+Quantitative Traits Using the r Package Sommer.''} \emph{PLOS ONE} 11
+(6): e0156744. \url{https://doi.org/10.1371/journal.pone.0156744}.
+
+\bibitem[\citeproctext]{ref-Seabold2010}
+Seabold, Skipper, and Josef Perktold. 2010. {``Statsmodels: Econometric
+and Statistical Modeling with Python.''} In \emph{9th Python in Science
+Conference}.
+
+\end{CSLReferences}
+
+\end{document}

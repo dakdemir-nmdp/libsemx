@@ -3,21 +3,34 @@ title: "libsemx Manuscript Draft"
 author: "Deniz Akdemir and contributors"
 date: "`r Sys.Date()`"
 output:
-  html_document:
-    toc: true
-    toc_depth: 2
-    number_sections: true
   pdf_document:
     toc: true
     toc_depth: 2
     number_sections: true
     latex_engine: xelatex
+    keep_tex: true
+    highlight: tango
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
 documentclass: article
 bibliography: references.bib
+geometry: margin=1in
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, comment = "#>")
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  comment = "#>",
+  fig.width = 6,
+  fig.height = 4,
+  fig.align = "center",
+  out.width = "\\linewidth"
+)
+options(width = 80)
 knitr::opts_knit$set(root.dir = normalizePath("../.."))
 
 # Load semx R bindings (devtools fallback for local builds)
